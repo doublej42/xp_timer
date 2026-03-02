@@ -71,10 +71,20 @@ end
 local xpt_ui_frame
 
 local function create_ui()
-    local frame = CreateFrame("Frame","XP_Timer_UI_Frame",UIParent)
+    -- use BackdropTemplate for borders
+    local frame = CreateFrame("Frame","XP_Timer_UI_Frame",UIParent,"BackdropTemplate")
     frame:SetSize(200,24)
     frame:SetPoint("CENTER",0,0)
     frame:SetMovable(true)
+    -- give a light border and semi-transparent black background
+    frame:SetBackdrop({
+        bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 12,
+        insets = { left=2, right=2, top=2, bottom=2 },
+    })
+    frame:SetBackdropColor(0,0,0,0.4)
+    frame:SetBackdropBorderColor(1,1,1,1)
     frame:EnableMouse(true)
     frame:RegisterForDrag("LeftButton")
     frame:SetScript("OnDragStart", frame.StartMoving)
@@ -88,13 +98,33 @@ local function create_ui()
             xpt_global_data.ui_yOfs = yOfs
         end)
 
+    -- create background segments: rested and normal
+    local rested_bg = frame:CreateTexture(nil,"BACKGROUND")
+    rested_bg:SetTexture("Interface\\ChatFrame\\ChatFrameBackground")
+    rested_bg:SetVertexColor(0.6,0.8,1,0.5) -- light blue
+    rested_bg:SetPoint("LEFT", frame, "LEFT")
+    rested_bg:SetHeight(frame:GetHeight())
+
+    local normal_bg = frame:CreateTexture(nil,"BACKGROUND")
+    normal_bg:SetTexture("Interface\\ChatFrame\\ChatFrameBackground")
+    normal_bg:SetVertexColor(0.5,1,0.5,0.5) -- light green
+    normal_bg:SetPoint("LEFT", rested_bg, "RIGHT")
+    normal_bg:SetPoint("RIGHT", frame, "RIGHT")
+    normal_bg:SetHeight(frame:GetHeight())
+
+    -- main XP fill bar on top
     local bar = CreateFrame("StatusBar", nil, frame)
     bar:SetAllPoints(true)
     bar:SetStatusBarTexture("Interface\\TARGETINGFRAME\\UI-StatusBar")
     bar:GetStatusBarTexture():SetHorizTile(false)
     bar:SetMinMaxValues(0, 100)
     bar:SetValue(0)
-    bar:SetStatusBarColor(0.0,0.5,1.0)
+    bar:SetStatusBarColor(0.0,0.8,0.0)
+
+    -- store references for updates
+    frame.rested_bg = rested_bg
+    frame.normal_bg = normal_bg
+    frame.bar = bar
 
     local text = bar:CreateFontString(nil,"OVERLAY","GameFontNormal")
     text:SetPoint("CENTER",0,0)
@@ -141,6 +171,16 @@ function xpt:update_ui()
     local pct = 0
     if xp_max > 0 then pct = xp_cur / xp_max * 100 end
     xpt_ui_frame.bar:SetValue(pct)
+    -- update rested percentage background
+    local rest = GetXPExhaustion() or 0
+    local restPct = 0
+    if xp_max > 0 then
+        restPct = math.min(rest / xp_max * 100, 100)
+    end
+    local totalWidth = xpt_ui_frame:GetWidth()
+    if xpt_ui_frame.rested_bg then
+        xpt_ui_frame.rested_bg:SetWidth(totalWidth * (restPct/100))
+    end
     local time_left = 0
     local time_diff = GetTime() - self.start_time
     local xp_per_second = 0
