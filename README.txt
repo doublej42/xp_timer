@@ -11,8 +11,10 @@ How to use:
 
 It also tracks gold so type /ct to see how much gold you've made in the past hour.
 
+A small movable experience bar now appears on your screen after logging in.  You can drag it with the left mouse button; its position will be saved between sessions.  The bar shows your current level percentage and an estimate of how long to finish the level, while the line below displays the amount of gold (and any additional tracked currencies) gained in the last five minutes.
 
-I am always looking for suggestions and feature requests so don’t be shy to contact me at addon (at) phansoft.ca,
+
+I am always looking for suggestions and feature requests so donï¿½t be shy to contact me at addon (at) phansoft.ca,
 -----
 
 And now a description written by an AI because I think it's cool

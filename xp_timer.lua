@@ -12,6 +12,8 @@ xpt_frame:RegisterEvent("ADDON_LOADED");
 xpt_frame:RegisterEvent("PLAYER_XP_UPDATE");
 xpt_frame:RegisterEvent("PLAYER_LOGIN");
 xpt_frame:RegisterEvent("PLAYER_MONEY");
+-- new event for tracking non-gold currencies
+xpt_frame:RegisterEvent("CURRENCY_DISPLAY_UPDATE");
 
 xpt_frame:RegisterEvent("GROUP_ROSTER_UPDATE");
 xpt_frame:RegisterEvent("LFG_PROPOSAL_SUCCEEDED");
@@ -59,6 +61,187 @@ function xp_util.to_gsc_string(copper)
 	ret = "-" .. ret;
   end
   return ret;
+end
+
+--[[
+    UI helpers and currency tracking
+]]
+
+-- frame that shows xp %, estimated time and recent currency gains
+local xpt_ui_frame
+
+local function create_ui()
+    local frame = CreateFrame("Frame","XP_Timer_UI_Frame",UIParent)
+    frame:SetSize(200,24)
+    frame:SetPoint("CENTER",0,0)
+    frame:SetMovable(true)
+    frame:EnableMouse(true)
+    frame:RegisterForDrag("LeftButton")
+    frame:SetScript("OnDragStart", frame.StartMoving)
+    frame:SetScript("OnDragStop", function(self)
+            self:StopMovingOrSizing()
+            -- remember position
+            local point, relativeTo, relPoint, xOfs, yOfs = self:GetPoint()
+            xpt_global_data.ui_point = point
+            xpt_global_data.ui_relPoint = relPoint
+            xpt_global_data.ui_xOfs = xOfs
+            xpt_global_data.ui_yOfs = yOfs
+        end)
+
+    local bar = CreateFrame("StatusBar", nil, frame)
+    bar:SetAllPoints(true)
+    bar:SetStatusBarTexture("Interface\\TARGETINGFRAME\\UI-StatusBar")
+    bar:GetStatusBarTexture():SetHorizTile(false)
+    bar:SetMinMaxValues(0, 100)
+    bar:SetValue(0)
+    bar:SetStatusBarColor(0.0,0.5,1.0)
+
+    local text = bar:CreateFontString(nil,"OVERLAY","GameFontNormal")
+    text:SetPoint("CENTER",0,0)
+    text:SetJustifyH("CENTER")
+
+    -- The old "GameFontSmall" template can taint in newer clients and may not exist;
+    -- use a modern small font object or set the font manually as a fallback.
+    local goldtext = frame:CreateFontString(nil,"OVERLAY")
+    if GameFontNormalSmall then
+        goldtext:SetFontObject(GameFontNormalSmall)
+    else
+        -- final fallback: specify a default font and size
+        goldtext:SetFont("Fonts\FRIZQT__.TTF", 10)
+    end
+    goldtext:SetPoint("TOP", frame, "BOTTOM", 0, -2)
+    goldtext:SetJustifyH("CENTER")
+
+    frame.bar = bar
+    frame.text = text
+    frame.goldtext = goldtext
+
+    if xpt_global_data.ui_point then
+        frame:ClearAllPoints()
+        frame:SetPoint(xpt_global_data.ui_point, UIParent, xpt_global_data.ui_relPoint,
+                       xpt_global_data.ui_xOfs, xpt_global_data.ui_yOfs)
+    end
+
+    frame.elapsed = 0
+    frame:SetScript("OnUpdate", function(self, elapsed)
+        self.elapsed = self.elapsed + elapsed
+        if self.elapsed >= 1 then
+            self.elapsed = 0
+            xpt:update_ui()
+        end
+    end)
+
+    return frame
+end
+
+function xpt:update_ui()
+    if not xpt_ui_frame then return end
+    local xp_cur = UnitXP("player")
+    local xp_max = UnitXPMax("player")
+    local pct = 0
+    if xp_max > 0 then pct = xp_cur / xp_max * 100 end
+    xpt_ui_frame.bar:SetValue(pct)
+    local time_left = 0
+    local time_diff = GetTime() - self.start_time
+    local xp_per_second = 0
+    if time_diff > 0 then
+        xp_per_second = self.xp_gained / time_diff
+        if xp_per_second > 0 then
+            -- if player has gained XP since last UI update, recalc base
+            -- otherwise just tick down the previous estimate
+            local now = GetTime()
+            if xp_cur ~= self.last_xp_for_ui or self.time_left == 0 then
+                time_left = (xp_max - xp_cur) / xp_per_second
+            else
+                -- decrement by elapsed wall time
+                time_left = self.time_left - (now - self.last_ui_update_time)
+                if time_left < 0 then time_left = 0 end
+            end
+
+            self.time_left = time_left
+            self.last_ui_update_time = now
+            self.last_xp_for_ui = xp_cur
+        end
+    end
+
+    -- only append the ETA when we have a positive rate (i.e. XP has been
+    -- earned since the reset); otherwise just show percentage alone
+    local line = string.format("%.1f%%", pct)
+    if xp_per_second > 0 then
+        line = line .. "  " .. xp_util.to_hms_string(time_left)
+    end
+    xpt_ui_frame.text:SetText(line)
+
+    -- gold in last 5 minutes
+    local now = GetTime()
+    local gold5 = 0
+    if xpt_character_data.gold_events then
+        for i=#xpt_character_data.gold_events,1,-1 do
+            local ev = xpt_character_data.gold_events[i]
+            if now - ev.time <= 300 then
+                gold5 = gold5 + ev.diff
+            else
+                if now - ev.time > 86400 then
+                    table.remove(xpt_character_data.gold_events, i)
+                end
+            end
+        end
+    end
+    local goldstr = xp_util.to_gsc_string(gold5)
+
+    local currencies = {}
+    if xpt_character_data.currency_history then
+        local sums = {}
+        for i=#xpt_character_data.currency_history,1,-1 do
+            local ev = xpt_character_data.currency_history[i]
+            if now - ev.time <= 300 then
+                sums[ev.name] = (sums[ev.name] or 0) + ev.diff
+            elseif now - ev.time > 86400 then
+                table.remove(xpt_character_data.currency_history,i)
+            end
+        end
+        for name, amt in pairs(sums) do
+            table.insert(currencies, string.format("%s %+d", name, amt))
+        end
+    end
+    local curstr = ""
+    if #currencies>0 then
+        curstr = table.concat(currencies, "  ")
+    end
+    local display = "Gold 5m: "..goldstr
+    if curstr~="" then display = display.."  "..curstr end
+    xpt_ui_frame.goldtext:SetText(display)
+end
+
+function xpt:trackCurrencies()
+    if not xpt_character_data.currency_last_amounts then
+        xpt_character_data.currency_last_amounts = {}
+    end
+    if not xpt_character_data.currency_history then
+        xpt_character_data.currency_history = {}
+    end
+    local n = C_CurrencyInfo.GetCurrencyListSize()
+    for i=1,n do
+        local info = C_CurrencyInfo.GetCurrencyListInfo(i)
+        if info and not info.isHeader then
+            local id = info.currencyTypesID or info.currencyID
+            local currency = C_CurrencyInfo.GetCurrencyInfo(id)
+            if currency then
+                local amount = currency.quantity or 0
+                local last = xpt_character_data.currency_last_amounts[id] or amount
+                local diff = amount - last
+                if diff ~= 0 then
+                    table.insert(xpt_character_data.currency_history,{time=GetTime(),id=id,name=info.name,diff=diff})
+                    xpt_character_data.currency_last_amounts[id] = amount
+                end
+            end
+        end
+    end
+end
+
+function xpt:CURRENCY_DISPLAY_UPDATE(...)
+    xpt:trackCurrencies()
+    xpt:update_ui()
 end
 
 
@@ -132,7 +315,11 @@ function xpt:PLAYER_LOGIN(...)
 	DEFAULT_CHAT_FRAME:AddMessage("XP Timer loaded. Type '/xpt help' for more information");
 	self:cash_timer_setup()
 	self:reset();
-	
+	-- create floating xp bar UI
+	xpt_ui_frame = create_ui()
+	-- gather initial currency values so deltas are correct
+	self:trackCurrencies()
+	self:update_ui()
 end
 
 function xpt:PLAYER_XP_UPDATE(...)
@@ -177,6 +364,8 @@ function xpt:PLAYER_XP_UPDATE(...)
 		end
 	end -- time has passed:
 	self.old_xp = xp_cur;
+	-- refresh UI
+	self:update_ui()
 end
 
 function xpt:default()
@@ -215,6 +404,11 @@ function xpt:PLAYER_MONEY(...)
 		local current_cash = GetMoney(); 
 		local cash_diff = current_cash - self.cash_last_known ;
 		self.cash_last_known = current_cash;
+		-- record gold change for the 5‑minute UI summary
+		if cash_diff ~= 0 then
+			xpt_character_data.gold_events = xpt_character_data.gold_events or {}
+			table.insert(xpt_character_data.gold_events,{time=GetTime(),diff=cash_diff})
+		end
 		if xpt_global_data["show_cash_on_earn"] then
 			if ( cash_diff > 0) then
 				DEFAULT_CHAT_FRAME:AddMessage("You just made "..xp_util.to_gsc_string(cash_diff));
@@ -222,6 +416,8 @@ function xpt:PLAYER_MONEY(...)
 				DEFAULT_CHAT_FRAME:AddMessage("You just lost "..xp_util.to_gsc_string(cash_diff));			
 			end
 		end
+		-- update UI immediately
+		self:update_ui()
 		--DEFAULT_CHAT_FRAME:AddMessage("You have "..xp_util.to_gsc_string(GetMoney()));
 		if (xpt_character_data.cash_values_array[xpt_character_data.cash_running_time] == nil) then
 			xpt_character_data.cash_values_array[xpt_character_data.cash_running_time] = cash_diff
@@ -325,8 +521,14 @@ function xpt:reset()
 	self.group_start = 0;
 	self.xp_checked_time = self.start_time;
 	self.time_till_next_level = 86400;
-	self.xp_gained = 1;
-	self.xp_diff = 1;
+	-- start with no XP gained so the UI won't show an ETA until the
+	-- user actually earns experience
+	self.xp_gained = 0;
+	self.xp_diff = 0;
+	-- UI bookkeeping for countdown logic
+	self.time_left = 0;
+	self.last_ui_update_time = GetTime();
+	self.last_xp_for_ui = self.old_xp;
 	check_for_join_and_leave();
     if (self.how_time_on_xp == nil) then
         xpt_global_data.show_time_on_xp = true;
@@ -337,6 +539,7 @@ function xpt:help(msg)
 	DEFAULT_CHAT_FRAME:AddMessage("XP Timer Usage:");
 	DEFAULT_CHAT_FRAME:AddMessage("/xpt help -- this help");
 	DEFAULT_CHAT_FRAME:AddMessage("/xpt -- Get information about the XP you have gained");
+	DEFAULT_CHAT_FRAME:AddMessage("(A draggable XP bar also appears on your screen with percentage & time.)");
 	DEFAULT_CHAT_FRAME:AddMessage("/xpt reset -- reset your XP timer. great for you leave town or start a dungeon");
 	DEFAULT_CHAT_FRAME:AddMessage("/xpt hour -- xp gained average per hour if logged in for more than an hour");
 	DEFAULT_CHAT_FRAME:AddMessage("/xpt cash OR /ct -- show how much gold you have gained in the past 24 hours");
