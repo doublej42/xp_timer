@@ -85,6 +85,7 @@ local xpt_ui_frame
 local function create_ui()
     -- use BackdropTemplate for borders
     local frame = CreateFrame("Frame","XP_Timer_UI_Frame",UIParent,"BackdropTemplate")
+    -- make room for the gold text underneath the bar
     frame:SetSize(200,24)
     frame:SetPoint("CENTER",0,0)
     frame:SetMovable(true)
@@ -124,9 +125,11 @@ local function create_ui()
     normal_bg:SetPoint("RIGHT", frame, "RIGHT")
     normal_bg:SetHeight(frame:GetHeight())
 
-    -- main XP fill bar on top
+    -- main XP fill bar on top (only occupies the upper portion of the frame)
     local bar = CreateFrame("StatusBar", nil, frame)
-    bar:SetAllPoints(true)
+    bar:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, 0)
+    bar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 0, 0)
+    bar:SetHeight(24)
     bar:SetStatusBarTexture("Interface\\TARGETINGFRAME\\UI-StatusBar")
     bar:GetStatusBarTexture():SetHorizTile(false)
     bar:SetMinMaxValues(0, 100)
@@ -152,7 +155,8 @@ local function create_ui()
         goldtext:SetFont("Fonts\FRIZQT__.TTF", 10)
     end
     -- anchor inside frame area so dragging frame still works when bar
-    goldtext:SetPoint("CENTER", frame, "CENTER", 0, 0)
+    -- position the gold text below the XP bar
+    goldtext:SetPoint("TOP", bar, "BOTTOM", 0, -2)
     goldtext:SetJustifyH("CENTER")
 
     -- allow clicks on the text to move the parent frame as well
