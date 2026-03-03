@@ -4,10 +4,18 @@
 
 
 local xpt = {};
-local xpt_global_data_defaults = {};
+local xpt_global_data_defaults = { show_chat = true, show_ui = true };
 local xpt_character_data_defaults = {};
 local xpt_frame = CreateFrame("Frame");
 local wasinparty = false;
+
+-- helper for controlled chat output
+function xpt:print(msg, r, g, b)
+    if xpt_global_data.show_chat then
+        DEFAULT_CHAT_FRAME:AddMessage(msg, r, g, b)
+    end
+end
+
 xpt_frame:RegisterEvent("ADDON_LOADED");
 xpt_frame:RegisterEvent("PLAYER_XP_UPDATE");
 xpt_frame:RegisterEvent("PLAYER_LOGIN");
@@ -143,8 +151,23 @@ local function create_ui()
         -- final fallback: specify a default font and size
         goldtext:SetFont("Fonts\FRIZQT__.TTF", 10)
     end
-    goldtext:SetPoint("TOP", frame, "BOTTOM", 0, -2)
+    -- anchor inside frame area so dragging frame still works when bar
+    goldtext:SetPoint("CENTER", frame, "CENTER", 0, 0)
     goldtext:SetJustifyH("CENTER")
+
+    -- allow clicks on the text to move the parent frame as well
+    goldtext:EnableMouse(true)
+    goldtext:SetScript("OnMouseDown", function()
+        frame:StartMoving()
+    end)
+    goldtext:SetScript("OnMouseUp", function()
+        frame:StopMovingOrSizing()
+        local point, relativeTo, relPoint, xOfs, yOfs = frame:GetPoint()
+        xpt_global_data.ui_point = point
+        xpt_global_data.ui_relPoint = relPoint
+        xpt_global_data.ui_xOfs = xOfs
+        xpt_global_data.ui_yOfs = yOfs
+    end)
 
     frame.bar = bar
     frame.text = text
@@ -168,8 +191,81 @@ local function create_ui()
     return frame
 end
 
+-- create an options panel under Interface Options or Settings
+local function create_options_panel()
+    local panel = CreateFrame("Frame", "XP_Timer_Options", UIParent)
+    panel.name = "XP Timer"
+
+    local title = panel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+    title:SetPoint("TOPLEFT", 16, -16)
+    title:SetText("XP Timer Options")
+
+    panel.showChat = CreateFrame("CheckButton", "XP_Timer_ShowChat", panel, "InterfaceOptionsCheckButtonTemplate")
+    panel.showChat:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -40)
+    panel.showChat.Text:SetText("Show chat messages")
+    panel.showChat:SetScript("OnClick", function(self)
+        xpt_global_data.show_chat = self:GetChecked()
+    end)
+
+    panel.showUI = CreateFrame("CheckButton", "XP_Timer_ShowUI", panel, "InterfaceOptionsCheckButtonTemplate")
+    panel.showUI:SetPoint("TOPLEFT", panel.showChat, "BOTTOMLEFT", 0, -10)
+    panel.showUI.Text:SetText("Show UI frame")
+    panel.showUI:SetScript("OnClick", function(self)
+        xpt_global_data.show_ui = self:GetChecked()
+        if xpt_ui_frame then
+            if self:GetChecked() then
+                xpt_ui_frame:Show()
+            else
+                xpt_ui_frame:Hide()
+            end
+        end
+    end)
+
+    panel:SetScript("OnShow", function(self)
+        panel.showChat:SetChecked(xpt_global_data.show_chat)
+        panel.showUI:SetChecked(xpt_global_data.show_ui)
+    end)
+
+    -- registration logic: prefer new Settings API when available
+    if Settings and Settings.RegisterCanvasLayoutCategory then
+        local category = Settings.RegisterCanvasLayoutCategory(panel, panel.name)
+        Settings.RegisterAddOnCategory(category)
+        xpt.settings_panel = panel
+        xpt.settings_category = category
+    else
+        -- try registering the panel; if the old API isn't available yet, schedule a retry
+        local function register()
+            if InterfaceOptions_AddCategory then
+                InterfaceOptions_AddCategory(panel)
+            else
+                C_Timer.After(1, register)
+            end
+        end
+        register()
+        xpt.settings_panel = panel
+    end
+end
+
+
+-- programmatic open for settings
+function xpt:OpenSettings()
+    if Settings and Settings.OpenToCategory and xpt.settings_category then
+        Settings.OpenToCategory(xpt.settings_category.ID)
+    elseif xpt.settings_panel then
+        InterfaceOptionsFrame_OpenToCategory(xpt.settings_panel)
+    end
+end
+
+
 function xpt:update_ui()
     if not xpt_ui_frame then return end
+    -- respect user setting for UI visibility
+    if xpt_global_data.show_ui then
+        xpt_ui_frame:Show()
+    else
+        xpt_ui_frame:Hide()
+        -- still update currency events for the chat side
+    end
     local xp_cur = UnitXP("player")
     local xp_max = UnitXPMax("player")
 
@@ -386,12 +482,12 @@ local function check_for_join_and_leave()
 	if IsInGroup() and wasinparty == false then -- if nil this is first check after reload/relog
 		-- We joined a raid/party.
 		-- remember this time
-		DEFAULT_CHAT_FRAME:AddMessage("You are in a group /xpt party to see a report")
-		 xpt:party_start()
+		xpt:print("You are in a group /xpt party to see a report")
+	 	 xpt:party_start()
 	end
 
 	if not IsInGroup() and wasinparty then
-		DEFAULT_CHAT_FRAME:AddMessage("You left a group")
+		xpt:print("You left a group")
 		xpt:party()
 		xpt:party_end()
 	end
@@ -409,7 +505,7 @@ function xpt:handle_slashes(msg)
 					if self[command] and type(self[command]) == "function"  then
 						return self[command](self,rest)
 					else
-					   DEFAULT_CHAT_FRAME:AddMessage("Unknown Command");
+					   xpt:print("Unknown Command");
 					end
 				end
 end
@@ -419,42 +515,51 @@ end
 --local old_xp,start_time,xp_gained,xp_diff
 
 function xpt:ADDON_LOADED(...)
-	local addon = ...
-	if addon == "xp_timer" then
-		if type(xpt_global_data) ~= "table" then
-			xpt_global_data  = xpt_global_data_defaults;
-		end
-		if type(xpt_character_data) ~= "table" then
-			xpt_character_data  = xpt_character_data_defaults;
-		end
-		if not SlashCmdList["XPTIMER"] then -- make sure we don't overwrite default if Blizz decides to use same name
-				SlashCmdList["XPTIMER"] = function(msg)
-				   xpt:handle_slashes(msg);
-				end -- end function
-				SLASH_XPTIMER1 = "/xpt";
-				SLASH_XPTIMER2 = "/xp_timer";
-		end -- end if 
-		if not SlashCmdList["CASHTIMER"] then -- make sure we don't overwrite default if Blizz decides to use same name
-				SlashCmdList["CASHTIMER"] = function(msg)
-				   xpt:ct(msg);
-				end -- end function
-				SLASH_CASHTIMER1 = "/ct";
-				SLASH_CASHTIMER2 = "/cash_timer";
-		end -- end if 
-	end
+    local addon = ...
+    if addon == "xp_timer" then
+        if type(xpt_global_data) ~= "table" then
+            xpt_global_data  = xpt_global_data_defaults;
+        end
+        if type(xpt_character_data) ~= "table" then
+            xpt_character_data  = xpt_character_data_defaults;
+        end
+        -- ensure boolean defaults exist
+        if xpt_global_data.show_chat == nil then xpt_global_data.show_chat = true end
+        if xpt_global_data.show_ui == nil then xpt_global_data.show_ui = true end
+
+        if not SlashCmdList["XPTIMER"] then -- make sure we don't overwrite default if Blizz decides to use same name
+                SlashCmdList["XPTIMER"] = function(msg)
+                   xpt:handle_slashes(msg);
+                end -- end function
+                SLASH_XPTIMER1 = "/xpt";
+                SLASH_XPTIMER2 = "/xp_timer";
+        end -- end if 
+        if not SlashCmdList["CASHTIMER"] then -- make sure we don't overwrite default if Blizz decides to use same name
+                SlashCmdList["CASHTIMER"] = function(msg)
+                   xpt:ct(msg);
+                end -- end function
+                SLASH_CASHTIMER1 = "/ct";
+                SLASH_CASHTIMER2 = "/cash_timer";
+        end -- end if 
+    end
 end
 
 
 
 function xpt:PLAYER_LOGIN(...)
-	DEFAULT_CHAT_FRAME:AddMessage("XP Timer loaded. Type '/xpt help' for more information");
+    xpt:print("XP Timer loaded. Type '/xpt help' for more information");
 	self:cash_timer_setup()
 	self:reset();
 	-- create floating xp bar UI
 	xpt_ui_frame = create_ui()
+	if not xpt_global_data.show_ui and xpt_ui_frame then
+		xpt_ui_frame:Hide()
+	end
 	-- gather initial currency values so deltas are correct
 	self:trackCurrencies()
 	self:update_ui()
+	-- build options panel once at login (actual registration may be deferred)
+	create_options_panel()
 end
 
 function xpt:PLAYER_ENTERING_WORLD(event, isInitialLogin, isReloadingUi)
@@ -463,11 +568,11 @@ function xpt:PLAYER_ENTERING_WORLD(event, isInitialLogin, isReloadingUi)
         self.in_instance = true
         self.instance_start_time = GetTime()
         self.instance_gold_total = 0
-        DEFAULT_CHAT_FRAME:AddMessage("Entered instance ("..(instanceType or "")..") - tracking gold")
+        xpt:print("Entered instance ("..(instanceType or "")..") - tracking gold")
     elseif not inInstance and self.in_instance then
         -- left instance
         self.in_instance = false
-        DEFAULT_CHAT_FRAME:AddMessage("Left instance, total gold: "..xp_util.to_gsc_string(self.instance_gold_total))
+        xpt:print("Left instance, total gold: "..xp_util.to_gsc_string(self.instance_gold_total))
     end
 end
 
@@ -480,7 +585,7 @@ function xpt:PLAYER_XP_UPDATE(...)
 	end
 	self.xp_diff = xp_cur - self.old_xp;
 	if (self.xp_diff < 0) then -- lvled up
-		DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00Congrats on the level up|r");
+			xpt:print("|cff00ff00Congrats on the level up|r");
 		self.xp_diff = 1;
 	end
 	self.xp_gained = self.xp_gained + self.xp_diff;
@@ -496,12 +601,12 @@ function xpt:PLAYER_XP_UPDATE(...)
 			self.time_till_next_level = (UnitXPMax("player") - xp_cur) / xp_per_second
 			local estimate_inacuracy = last_estimated_time - self.time_till_next_level;
 			if estimate_inacuracy > 60 then
-				DEFAULT_CHAT_FRAME:AddMessage(string.format("Time to next level down to: |cff00ff00%s|r",xp_util.to_hms_string(self.time_till_next_level)),0.38,0.58,0.92);
+					xpt:print(string.format("Time to next level down to: |cff00ff00%s|r",xp_util.to_hms_string(self.time_till_next_level)),0.38,0.58,0.92);
 			else
 				if estimate_inacuracy < -60 then
-				DEFAULT_CHAT_FRAME:AddMessage(string.format("Time to next level increasing: |cffff0000%s|r kill faster or change zones",xp_util.to_hms_string(self.time_till_next_level)),0.38,0.58,0.92);
+					xpt:print(string.format("Time to next level increasing: |cffff0000%s|r kill faster or change zones",xp_util.to_hms_string(self.time_till_next_level)),0.38,0.58,0.92);
 				else
-				DEFAULT_CHAT_FRAME:AddMessage(string.format("Time to next level: %s",xp_util.to_hms_string(self.time_till_next_level)),0.38,0.58,0.92);
+					xpt:print(string.format("Time to next level: %s",xp_util.to_hms_string(self.time_till_next_level)),0.38,0.58,0.92);
 				end
 			end
 		end
@@ -512,15 +617,15 @@ end
 
 function xpt:default()
     local time_diff = GetTime() - self.start_time;
-	DEFAULT_CHAT_FRAME:AddMessage("Time Online: "..xp_util.to_hms_string(time_diff));
-	DEFAULT_CHAT_FRAME:AddMessage("XP Gained total: "..self.xp_gained);
-	DEFAULT_CHAT_FRAME:AddMessage("XP Last Gained: "..self.xp_diff);
+		xpt:print("Time Online: "..xp_util.to_hms_string(time_diff));
+		xpt:print("XP Gained total: "..self.xp_gained);
+		xpt:print("XP Last Gained: "..self.xp_diff);
 	local xp_per_second = self.xp_gained / time_diff;
-	DEFAULT_CHAT_FRAME:AddMessage("XP per second: "..xp_per_second);
+		xpt:print("XP per second: "..xp_per_second);
 	local xp_cur = UnitXP("player");
 	local kills_to_lvl = math.ceil((UnitXPMax("player") - xp_cur) / self.xp_diff);
-	DEFAULT_CHAT_FRAME:AddMessage("Kills to next level: "..kills_to_lvl);
-	DEFAULT_CHAT_FRAME:AddMessage(string.format("Time to next level: |cffff0000%s|r",xp_util.to_hms_string((UnitXPMax("player") - xp_cur) / xp_per_second)));
+		xpt:print("Kills to next level: "..kills_to_lvl);
+		xpt:print(string.format("Time to next level: |cffff0000%s|r",xp_util.to_hms_string((UnitXPMax("player") - xp_cur) / xp_per_second)));
 end
 
 
@@ -528,10 +633,10 @@ function xpt:hour()
     local time_diff = GetTime() - self.start_time;
 	if time_diff >= (3600) then
 		local xp_per_hour = (self.xp_gained / time_diff) * 3600;
-		DEFAULT_CHAT_FRAME:AddMessage("XP per hour: "..xp_per_hour);
+			xpt:print("XP per hour: "..xp_per_hour);
 	else
-		DEFAULT_CHAT_FRAME:AddMessage("You have not been logged in without a reset for an hour");
-		DEFAULT_CHAT_FRAME:AddMessage("Time Logged IN: "..xp_util.to_hms_string(time_diff));
+			xpt:print("You have not been logged in without a reset for an hour");
+			xpt:print("Time Logged IN: "..xp_util.to_hms_string(time_diff));
 	end
 end
 
@@ -553,9 +658,9 @@ function xpt:PLAYER_MONEY(...)
 		end
 		if xpt_global_data["show_cash_on_earn"] then
 			if ( cash_diff > 0) then
-				DEFAULT_CHAT_FRAME:AddMessage("You just made "..xp_util.to_gsc_string(cash_diff));
+					xpt:print("You just made "..xp_util.to_gsc_string(cash_diff));
 			else
-				DEFAULT_CHAT_FRAME:AddMessage("You just lost "..xp_util.to_gsc_string(cash_diff));			
+					xpt:print("You just lost "..xp_util.to_gsc_string(cash_diff));		
 			end
 		end
 		-- update UI immediately
@@ -598,10 +703,10 @@ function xpt:ctdefault(...)
 		timespan = tonumber(timespan) * 60;
 	elseif (timespan == "off") then
 		xpt_global_data.show_cash_on_earn = false;
-		DEFAULT_CHAT_FRAME:AddMessage("Cash display |cffff0000disabled|r");
+			xpt:print("Cash display |cffff0000disabled|r");
 	elseif (timespan == "on") then
 		xpt_global_data.show_cash_on_earn = true;
-		DEFAULT_CHAT_FRAME:AddMessage("Cash display |cff00ff00enabled|r");
+			xpt:print("Cash display |cff00ff00enabled|r");
 	end
 	
 
@@ -637,11 +742,11 @@ function xpt:ctdefault(...)
 	 --done memory cleanup
 	end
 	--DEFAULT_CHAT_FRAME:AddMessage("Running time: "..xp_util.to_hms_string(xpt_character_data.cash_running_time));
-	DEFAULT_CHAT_FRAME:AddMessage("Cash in last 5 minutes: "..xp_util.to_gsc_string(cash_in_last_minute));
-	DEFAULT_CHAT_FRAME:AddMessage("Cash in last hour: "..xp_util.to_gsc_string(cash_in_last_hour));
-	DEFAULT_CHAT_FRAME:AddMessage("Cash in last day: "..xp_util.to_gsc_string(cash_in_last_day));
+		xpt:print("Cash in last 5 minutes: "..xp_util.to_gsc_string(cash_in_last_minute));
+		xpt:print("Cash in last hour: "..xp_util.to_gsc_string(cash_in_last_hour));
+		xpt:print("Cash in last day: "..xp_util.to_gsc_string(cash_in_last_day));
 	if (include_timespan) then
-		DEFAULT_CHAT_FRAME:AddMessage(string.format("Cash in last |cff00ff00%d|r minutes: %s ",timespan/60,xp_util.to_gsc_string(cash_in_timespan)));
+			xpt:print(string.format("Cash in last |cff00ff00%d|r minutes: %s ",timespan/60,xp_util.to_gsc_string(cash_in_timespan)));
 	end
 end
 function xpt:cash(...)
@@ -660,7 +765,7 @@ end
 
 function xpt:reset()
 	if (self.start_time ~= nil) then
-		DEFAULT_CHAT_FRAME:AddMessage("XP Timer reset");
+		xpt:print("XP Timer reset");
 	end
 	self.old_xp = UnitXP("player");
 	self.start_time = GetTime(); 
@@ -688,18 +793,18 @@ function xpt:reset()
 end
 
 function xpt:help(msg)
-	DEFAULT_CHAT_FRAME:AddMessage("XP Timer Usage:");
-	DEFAULT_CHAT_FRAME:AddMessage("/xpt help -- this help");
-	DEFAULT_CHAT_FRAME:AddMessage("/xpt -- Get information about the XP you have gained");
-	DEFAULT_CHAT_FRAME:AddMessage("(A draggable XP bar also appears on your screen with percentage & time.)");
-	DEFAULT_CHAT_FRAME:AddMessage("/xpt reset -- reset your XP timer. great for you leave town or start a dungeon");
-	DEFAULT_CHAT_FRAME:AddMessage("/xpt hour -- xp gained average per hour if logged in for more than an hour");
-	DEFAULT_CHAT_FRAME:AddMessage("/xpt cash OR /ct -- show how much gold you have gained in the past 24 hours");
-	DEFAULT_CHAT_FRAME:AddMessage("/xpt off OR /xpt on -- disable or enable the status message on new XP");
-	DEFAULT_CHAT_FRAME:AddMessage("/xpt party OR /xpt group -- Find information on the current group.");
-	DEFAULT_CHAT_FRAME:AddMessage("/xpt party_start OR /xpt party_end -- Manually start party tracking.");
-	DEFAULT_CHAT_FRAME:AddMessage("/ct time -- How much gold in the last 'time' minutes. Max 24 hours");
-	DEFAULT_CHAT_FRAME:AddMessage("/ct on OR /ct off -- turn on (off by default) reports on gold earned to blizzard style");
+		xpt:print("XP Timer Usage:");
+		xpt:print("/xpt help -- this help");
+		xpt:print("/xpt -- Get information about the XP you have gained");
+		xpt:print("(A draggable XP bar also appears on your screen with percentage & time.)");
+		xpt:print("/xpt reset -- reset your XP timer. great for you leave town or start a dungeon");
+		xpt:print("/xpt hour -- xp gained average per hour if logged in for more than an hour");
+		xpt:print("/xpt cash OR /ct -- show how much gold you have gained in the past 24 hours");
+		xpt:print("/xpt off OR /xpt on -- disable or enable the status message on new XP");
+		xpt:print("/xpt party OR /xpt group -- Find information on the current group.");
+		xpt:print("/xpt party_start OR /xpt party_end -- Manually start party tracking.");
+		xpt:print("/ct time -- How much gold in the last 'time' minutes. Max 24 hours");
+		xpt:print("/ct on OR /ct off -- turn on (off by default) reports on gold earned to blizzard style");
 end
 
 function xpt:cash_timer_setup()
