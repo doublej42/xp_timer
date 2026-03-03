@@ -11,6 +11,10 @@ local wasinparty = false;
 xpt_frame:RegisterEvent("ADDON_LOADED");
 xpt_frame:RegisterEvent("PLAYER_XP_UPDATE");
 xpt_frame:RegisterEvent("PLAYER_LOGIN");
+-- detect entry to dungeon/raid instances
+xpt_frame:RegisterEvent("PLAYER_ENTERING_WORLD");
+-- reputation tracking removed; we only care about currency now
+-- xpt_frame:RegisterEvent("UPDATE_FACTION");
 xpt_frame:RegisterEvent("PLAYER_MONEY");
 -- new event for tracking non-gold currencies
 xpt_frame:RegisterEvent("CURRENCY_DISPLAY_UPDATE");
@@ -168,6 +172,92 @@ function xpt:update_ui()
     if not xpt_ui_frame then return end
     local xp_cur = UnitXP("player")
     local xp_max = UnitXPMax("player")
+
+    -- if no xp can be earned or we are at max level, hide the XP bar (but keep gold text)
+    local level = UnitLevel("player")
+    local maxLevel = GetMaxPlayerLevel and GetMaxPlayerLevel() or 0
+    -- determine if we should hide xp bar elements (max level or no xp possible)
+    local hideXP = xp_max == 0 or (maxLevel>0 and level >= maxLevel)
+    if hideXP then
+        if xpt_ui_frame.bar then
+            xpt_ui_frame.bar:Hide()
+        end
+        if xpt_ui_frame.text then
+            xpt_ui_frame.text:Hide()
+        end
+        if xpt_ui_frame.rested_bg then
+            xpt_ui_frame.rested_bg:Hide()
+        end
+        if xpt_ui_frame.normal_bg then
+            xpt_ui_frame.normal_bg:Hide()
+        end
+        xpt_ui_frame:SetBackdropColor(0,0,0,0)
+        xpt_ui_frame:SetBackdropBorderColor(0,0,0,0)
+        if xpt_ui_frame.goldtext then
+            xpt_ui_frame.goldtext:Show()
+        end
+    else
+        -- ensure xp elements are visible when leveling
+        if xpt_ui_frame.bar then
+            xpt_ui_frame.bar:Show()
+        end
+        if xpt_ui_frame.text then
+            xpt_ui_frame.text:Show()
+        end
+        if xpt_ui_frame.rested_bg then
+            xpt_ui_frame.rested_bg:Show()
+        end
+        if xpt_ui_frame.normal_bg then
+            xpt_ui_frame.normal_bg:Show()
+        end
+        xpt_ui_frame:SetBackdropColor(0,0,0,0.4)
+        xpt_ui_frame:SetBackdropBorderColor(1,1,1,1)
+    end
+
+    local pct = 0
+    if not hideXP and xp_max > 0 then pct = xp_cur / xp_max * 100 end
+    xpt_ui_frame.bar:SetValue(pct)
+    -- update rested percentage background
+    local rest = GetXPExhaustion() or 0
+    local restPct = 0
+    if xp_max > 0 then
+        restPct = math.min(rest / xp_max * 100, 100)
+    end
+    local totalWidth = xpt_ui_frame:GetWidth()
+    if xpt_ui_frame.rested_bg then
+        xpt_ui_frame.rested_bg:SetWidth(totalWidth * (restPct/100))
+    end
+    local time_left = 0
+    local time_diff = GetTime() - self.start_time
+    local xp_per_second = 0
+    if time_diff > 0 then
+        xp_per_second = self.xp_gained / time_diff
+        if xp_per_second > 0 then
+            -- if player has gained XP since last UI update, recalc base
+            -- otherwise just tick down the previous estimate
+            local now = GetTime()
+            if xp_cur ~= self.last_xp_for_ui or self.time_left == 0 then
+                time_left = (xp_max - xp_cur) / xp_per_second
+            else
+                -- decrement by elapsed wall time
+                time_left = self.time_left - (now - self.last_ui_update_time)
+                if time_left < 0 then time_left = 0 end
+            end
+
+            self.time_left = time_left
+            self.last_ui_update_time = now
+            self.last_xp_for_ui = xp_cur
+        end
+    end
+
+    -- only append the ETA when we have a positive rate (i.e. XP has been
+    -- earned since the reset); otherwise just show percentage alone
+    local line = string.format("%.1f%%", pct)
+    if xp_per_second > 0 and not hideXP then
+        line = line .. "  " .. xp_util.to_hms_string(time_left)
+    end
+    xpt_ui_frame.text:SetText(line)
+
     local pct = 0
     if xp_max > 0 then pct = xp_cur / xp_max * 100 end
     xpt_ui_frame.bar:SetValue(pct)
@@ -215,6 +305,12 @@ function xpt:update_ui()
     -- gold in last 5 minutes
     local now = GetTime()
     local gold5 = 0
+    -- instance gold/time display
+    local instanceStr = ""
+    if self.in_instance and self.instance_start_time then
+        local instTime = xp_util.to_hms_string(now - self.instance_start_time)
+        instanceStr = "Instance gold: " .. xp_util.to_gsc_string(self.instance_gold_total) .. "  " .. instTime .. "\n"
+    end
     if xpt_character_data.gold_events then
         for i=#xpt_character_data.gold_events,1,-1 do
             local ev = xpt_character_data.gold_events[i]
@@ -248,7 +344,7 @@ function xpt:update_ui()
     if #currencies>0 then
         curstr = table.concat(currencies, "  ")
     end
-    local display = "Gold 5m: "..goldstr
+    local display = instanceStr .. "Gold 5m: "..goldstr
     if curstr~="" then display = display.."  "..curstr end
     xpt_ui_frame.goldtext:SetText(display)
 end
@@ -283,7 +379,6 @@ function xpt:CURRENCY_DISPLAY_UPDATE(...)
     xpt:trackCurrencies()
     xpt:update_ui()
 end
-
 
 -- Check if we join a party/raid.
 -- Thank you skada for the inspiration
@@ -362,38 +457,46 @@ function xpt:PLAYER_LOGIN(...)
 	self:update_ui()
 end
 
+function xpt:PLAYER_ENTERING_WORLD(event, isInitialLogin, isReloadingUi)
+    local inInstance, instanceType = IsInInstance()
+    if inInstance and not self.in_instance then
+        self.in_instance = true
+        self.instance_start_time = GetTime()
+        self.instance_gold_total = 0
+        DEFAULT_CHAT_FRAME:AddMessage("Entered instance ("..(instanceType or "")..") - tracking gold")
+    elseif not inInstance and self.in_instance then
+        -- left instance
+        self.in_instance = false
+        DEFAULT_CHAT_FRAME:AddMessage("Left instance, total gold: "..xp_util.to_gsc_string(self.instance_gold_total))
+    end
+end
+
 function xpt:PLAYER_XP_UPDATE(...)
 	local xp_cur = UnitXP("player");
 	
 	--Sometimes you get the event twice for a single XP grant
 	if (xp_cur  == self.old_xp) then
-		--DEFAULT_CHAT_FRAME:AddMessage(string.format("|cff00ff00DEBUG no xp gained:|r %d %d",xp_cur),0.38,0.58,0.92);
 		return;
 	end
 	self.xp_diff = xp_cur - self.old_xp;
-	--Save this just for if you level as a bit of a hack
 	if (self.xp_diff < 0) then -- lvled up
-		DEFAULT_CHAT_FRAME:AddMessage(string.format("|cff00ff00Congrats on the level up|r"));
-		self.xp_diff = 1; -- assume that the xp gained was the same as before, this will quickly factor out over time.
+		DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00Congrats on the level up|r");
+		self.xp_diff = 1;
 	end
-	
-	--track total xp gained
 	self.xp_gained = self.xp_gained + self.xp_diff;
-	-- find amount of time playing
+	
 	local time_diff = GetTime() - self.start_time;
-	if (time_diff > 0) then -- incase xp is gained instantly upon login divide by zero is not fun
+	if (time_diff > 0) then
 		if (xpt_global_data.show_time_on_xp) then
-			local xp_last_checked_time = self.xp_checked_time; -- last time we got XP
+			local xp_last_checked_time = self.xp_checked_time;
 			self.xp_checked_time = GetTime();
 			local time_since_last_xp = self.xp_checked_time  - xp_last_checked_time;
-			local last_estimated_time = self.time_till_next_level - time_since_last_xp; -- estimate minus the time change
+			local last_estimated_time = self.time_till_next_level - time_since_last_xp;
 			local xp_per_second = self.xp_gained / time_diff;
 			self.time_till_next_level = (UnitXPMax("player") - xp_cur) / xp_per_second
 			local estimate_inacuracy = last_estimated_time - self.time_till_next_level;
-			-- if estimate inaccuracy is > 0 then the person is leveling faster than before if it is negative then they are going slower
 			if estimate_inacuracy > 60 then
-			-- fast
-			DEFAULT_CHAT_FRAME:AddMessage(string.format("Time to next level down to: |cff00ff00%s|r",xp_util.to_hms_string(self.time_till_next_level)),0.38,0.58,0.92);
+				DEFAULT_CHAT_FRAME:AddMessage(string.format("Time to next level down to: |cff00ff00%s|r",xp_util.to_hms_string(self.time_till_next_level)),0.38,0.58,0.92);
 			else
 				if estimate_inacuracy < -60 then
 				DEFAULT_CHAT_FRAME:AddMessage(string.format("Time to next level increasing: |cffff0000%s|r kill faster or change zones",xp_util.to_hms_string(self.time_till_next_level)),0.38,0.58,0.92);
@@ -402,9 +505,8 @@ function xpt:PLAYER_XP_UPDATE(...)
 				end
 			end
 		end
-	end -- time has passed:
+	end
 	self.old_xp = xp_cur;
-	-- refresh UI
 	self:update_ui()
 end
 
@@ -458,6 +560,10 @@ function xpt:PLAYER_MONEY(...)
 		end
 		-- update UI immediately
 		self:update_ui()
+		-- track instance gold
+		if self.in_instance then
+			self.instance_gold_total = self.instance_gold_total + cash_diff
+		end
 		--DEFAULT_CHAT_FRAME:AddMessage("You have "..xp_util.to_gsc_string(GetMoney()));
 		if (xpt_character_data.cash_values_array[xpt_character_data.cash_running_time] == nil) then
 			xpt_character_data.cash_values_array[xpt_character_data.cash_running_time] = cash_diff
@@ -569,6 +675,12 @@ function xpt:reset()
 	self.time_left = 0;
 	self.last_ui_update_time = GetTime();
 	self.last_xp_for_ui = self.old_xp;
+
+	-- instance tracking
+	self.in_instance = false
+	self.instance_start_time = nil
+	self.instance_gold_total = 0
+
 	check_for_join_and_leave();
     if (self.how_time_on_xp == nil) then
         xpt_global_data.show_time_on_xp = true;
