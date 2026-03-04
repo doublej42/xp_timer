@@ -69,11 +69,15 @@ function xp_util.to_gsc(copper)
 end --to_hms
 
 function xp_util.to_gsc_string(copper)
-  local ret = string.format("|cffFFD700%dG|r |cffC0C0C0%dS|r |cffB87333%dC|r", xp_util.to_gsc(copper));
-  if (copper < 0) then
-	ret = "-" .. ret;
-  end
-  return ret;
+    local g,s,c = xp_util.to_gsc(copper)
+    local goldIcon = "|TInterface\\MoneyFrame\\UI-GoldIcon:0:0:0:0|t"
+    local silverIcon = "|TInterface\\MoneyFrame\\UI-SilverIcon:0:0:0:0|t"
+    local copperIcon = "|TInterface\\MoneyFrame\\UI-CopperIcon:0:0:0:0|t"
+    local ret = string.format("%d%s %d%s %d%s", g, goldIcon, s, silverIcon, c, copperIcon)
+    if (copper < 0) then
+        ret = "-" .. ret;
+    end
+    return ret;
 end
 
 --[[
@@ -311,11 +315,13 @@ function xpt:update_ui()
         xpt_ui_frame:Hide()
         -- still update currency events for the chat side
     end
+   
     local xp_cur = UnitXP("player")
     local xp_max = UnitXPMax("player")
 
     -- if no xp can be earned or we are at max level, hide the XP bar (but keep gold text)
     local level = UnitLevel("player")
+    local now = GetTime()
     local maxLevel = GetMaxPlayerLevel and GetMaxPlayerLevel() or 0
     -- determine if we should hide xp bar elements (max level or no xp possible)
     local hideXP = xp_max == 0 or (maxLevel>0 and level >= maxLevel)
@@ -355,6 +361,7 @@ function xpt:update_ui()
         xpt_ui_frame:SetBackdropBorderColor(1,1,1,1)
     end
 
+    --START XP BAR UPDATES
     local pct = 0
     if not hideXP and xp_max > 0 then pct = xp_cur / xp_max * 100 end
     xpt_ui_frame.bar:SetValue(pct)
@@ -378,7 +385,7 @@ function xpt:update_ui()
         if xp_per_second > 0 then
             -- if player has gained XP since last UI update, recalc base
             -- otherwise just tick down the previous estimate
-            local now = GetTime()
+            
             if xp_cur ~= self.last_xp_for_ui or self.time_left == 0 then
                 time_left = (xp_max - xp_cur) / xp_per_second
             else
@@ -419,7 +426,13 @@ function xpt:update_ui()
     local instanceStr = ""
     if self.in_instance and self.instance_start_time then
         local instTime = xp_util.to_hms_string(now - self.instance_start_time)
-        instanceStr = "Instance gold: " .. xp_util.to_gsc_string(self.instance_gold_total) .. "  " .. instTime .. "\n"
+        local xp_gained_in_instance = xp_cur - (self.instance_xp_at_start or 0)
+        local instance_xp_pct = 0
+        if xp_max > 0 then
+            instance_xp_pct = (xp_gained_in_instance / xp_max) * 100
+        end
+        instanceStr = "Instance gold: " .. xp_util.to_gsc_string(self.instance_gold_total) .. "  " .. instTime
+                      .. "  XP: " .. string.format("%.1f%%", instance_xp_pct) .. "\n"
     end
     
     if cash_in_last_minutes_cache == nil then
@@ -448,14 +461,13 @@ function xpt:update_ui()
         curstr = table.concat(currencies, "  ")
     end
     --end currencies
-
     local display = instanceStr .. "Gold " .. (xpt_global_data.cash_minute_ui_timeframe or 5) .. "m: "..goldstr
     if curstr~="" then display = display.."  "..curstr end
     xpt_ui_frame.goldtext:SetText(display)
 end
 
 function xpt:trackCurrencies()
-    xpt:print("Tracking currency changes...");
+    --xpt:print("Tracking currency changes...");
     if not xpt_character_data.currency_last_amounts then
         xpt_character_data.currency_last_amounts = {}
     end
@@ -580,8 +592,9 @@ function xpt:PLAYER_ENTERING_WORLD(event, isInitialLogin, isReloadingUi)
     if inInstance and not self.in_instance then
         self.in_instance = true
         self.instance_start_time = GetTime()
-        self.instance_gold_total = 0
-        xpt:print("Entered instance ("..(instanceType or "")..") - tracking gold")
+        self.instance_gold_total = 0        
+        self.instance_xp_at_start = UnitXP("player")        
+        xpt:print("Entered instance ("..(instanceType or "")..") - tracking gold and XP for this instance.")
     elseif not inInstance and self.in_instance then
         -- left instance
         self.in_instance = false
@@ -632,10 +645,14 @@ function xpt:default()
     local time_diff = GetTime() - self.start_time;
 		xpt:print("Time Online: "..xp_util.to_hms_string(time_diff));
 		xpt:print("XP Gained total: "..self.xp_gained);
+        if (self.xp_gained == 0) then
+            return
+        end
 		xpt:print("XP Last Gained: "..self.xp_diff);
 	local xp_per_second = self.xp_gained / time_diff;
 		xpt:print("XP per second: "..xp_per_second);
 	local xp_cur = UnitXP("player");
+
 	local kills_to_lvl = math.ceil((UnitXPMax("player") - xp_cur) / self.xp_diff);
 		xpt:print("Kills to next level: "..kills_to_lvl);
 		xpt:print(string.format("Time to next level: |cffff0000%s|r",xp_util.to_hms_string((UnitXPMax("player") - xp_cur) / xp_per_second)));
@@ -657,11 +674,11 @@ end
 -- We don't caount time before and after the last cash time so we just factor that out by 
 function xpt:PLAYER_MONEY(...)
 	    local current_time = math.floor(GetTime());
-		DEFAULT_CHAT_FRAME:AddMessage("You where paid at "..xp_util.to_hms_string(current_time));
+		--DEFAULT_CHAT_FRAME:AddMessage("You where paid at "..xp_util.to_hms_string(current_time));
 		local cash_time_diff = current_time - self.cash_time_last_paid ;
 		self.cash_time_last_paid = current_time;
 		xpt_character_data.cash_running_time = xpt_character_data.cash_running_time + cash_time_diff;
-		DEFAULT_CHAT_FRAME:AddMessage("You where last paid "..xp_util.to_hms_string(cash_time_diff).." ago.");
+		--DEFAULT_CHAT_FRAME:AddMessage("You where last paid "..xp_util.to_hms_string(cash_time_diff).." ago.");
 		local current_cash = GetMoney(); 
 		local cash_diff = current_cash - self.cash_last_known ;
 		self.cash_last_known = current_cash;
@@ -678,6 +695,7 @@ function xpt:PLAYER_MONEY(...)
 		-- track instance gold
 		if self.in_instance then
 			self.instance_gold_total = self.instance_gold_total + cash_diff
+            xpt:print("Instance gold total: "..xp_util.to_gsc_string(self.instance_gold_total) .. " (+" .. xp_util.to_gsc_string(cash_diff) .. " this gain)");
 		end
 		--DEFAULT_CHAT_FRAME:AddMessage("You have "..xp_util.to_gsc_string(GetMoney()));
 		if (xpt_character_data.cash_values_array[xpt_character_data.cash_running_time] == nil) then
@@ -712,12 +730,12 @@ end
 --Get the amount of cash made in the last X minutes
 function xpt:cash_in_last_minutes(...)
     local minutes = {...}
-    xpt:print("Calculating cash in the last "..table.concat(minutes,",").." minutes...");
+    --xpt:print("Calculating cash in the last "..table.concat(minutes,",").." minutes...");
     if not xpt_character_data.cash_values_array then return end
     local results = {}
     for i=1,#minutes do results[i] = 0 end
     local now = xpt_character_data.cash_running_time or 0
-    xpt:print("Current cash time: "..xp_util.to_hms_string(now));
+    --xpt:print("Current cash time: "..xp_util.to_hms_string(now));
     for cash_time, cash_made in pairs(xpt_character_data.cash_values_array) do
         local timeOffset = now - cash_time
         for i, m in ipairs(minutes) do
@@ -731,7 +749,7 @@ function xpt:cash_in_last_minutes(...)
             xpt_character_data.cash_values_array[cash_time] = nil
         end
     end
-    xpt:print("Cash in the last "..table.concat(minutes,",").." minutes: "..table.concat(results,","));
+    --xpt:print("Cash in the last "..table.concat(minutes,",").." minutes: "..table.concat(results,","));
     return unpack(results)
 end
 
@@ -783,7 +801,7 @@ function xpt:reset()
 	self.start_time = GetTime(); 
 	self.group_start = 0;
 	self.xp_checked_time = self.start_time;
-	self.time_till_next_level = 86400;
+	self.time_till_next_level = 0;
 	-- start with no XP gained so the UI won't show an ETA until the
 	-- user actually earns experience
 	self.xp_gained = 0;
@@ -791,12 +809,12 @@ function xpt:reset()
 
 	-- UI bookkeeping for countdown logic
 	self.time_left = 0;
-	self.last_ui_update_time = GetTime();
+	self.last_ui_update_time = self.start_time;
 	self.last_xp_for_ui = self.old_xp;
 
 	-- instance tracking
 	self.in_instance = false
-	self.instance_start_time = nil
+	self.instance_start_time = self.start_time
 	self.instance_gold_total = 0
 	check_for_join_and_leave();
     if (self.show_time_on_xp == nil) then
@@ -887,6 +905,9 @@ function xpt:party()
 	if self.group_start ~= 0 then
 		local time_diff = GetTime() - self.group_start;
 		DEFAULT_CHAT_FRAME:AddMessage("Time in party: "..xp_util.to_hms_string(time_diff));
+
+        
+
 		--if there is no party xp then xp is turned off or they have hit max level
 		local party_xp = self.xp_gained - self.group_xp_total
 		if self.group_xp_total ~= nil and party_xp > 0 then 
@@ -898,10 +919,12 @@ function xpt:party()
 		end
 		local cash_in_party = 0;
 		--update the time for cash tracking.
-		local current_time = math.floor(GetTime());
-		local cash_time_diff = current_time - self.cash_time_last_paid ;
+        local current_time = math.floor(GetTime());
+        local cash_time_diff = current_time - self.cash_time_last_paid ;
 		self.cash_time_last_paid = current_time;
-        local cash_in_party = select(1, xpt:cash_in_last_minutes(time_diff)) or 0
+		xpt_character_data.cash_running_time = xpt_character_data.cash_running_time + cash_time_diff;
+        DEFAULT_CHAT_FRAME:AddMessage("Time in party for cash tracking: "..xp_util.to_hms_string(time_diff));
+		local cash_in_party = select(1, xpt:cash_in_last_minutes(time_diff/60)) or 0
 		if cash_in_party > 0 then
 			DEFAULT_CHAT_FRAME:AddMessage(string.format("Cash in party: %s ",xp_util.to_gsc_string(cash_in_party)));
 		end
