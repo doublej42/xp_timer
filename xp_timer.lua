@@ -8,7 +8,7 @@ local xpt_global_data_defaults = { show_chat = true, show_ui = true, cash_minute
 local xpt_character_data_defaults = {};
 local xpt_frame = CreateFrame("Frame");
 local wasinparty = false;
-local cash_in_last_minutes_cache = nil;
+
 
 -- helper for controlled chat output
 function xpt:print(msg, r, g, b)
@@ -250,7 +250,6 @@ local function create_options_panel()
         local val = tonumber(self:GetText())
         if val and val > 0 then
             xpt_global_data.cash_minute_ui_timeframe = val
-            cash_in_last_minutes_cache = xpt:cash_in_last_minutes(xpt_global_data.cash_minute_ui_timeframe or 5);
             xpt:update_ui()
             self:ClearFocus()
         else
@@ -258,11 +257,11 @@ local function create_options_panel()
         end
     end)
 
-    panel.cashTimeDesc = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-    panel.cashTimeDesc:SetPoint("TOPLEFT", panel.cashTimeLabel, "BOTTOMLEFT", 0, -4)
-    panel.cashTimeDesc:SetPoint("RIGHT", panel, "RIGHT", -16, 0)
-    panel.cashTimeDesc:SetJustifyH("LEFT")
-    panel.cashTimeDesc:SetText("Gold is only tracked when you actually gain it; idle time and start and end (e.g. AFK or logged out) is ignored. The value shown is based on the most recent gain, up to the specified window, and data is retained for up to 24 hours. For example, if you go AFK for 10 minutes then return, the 5‑minute window still reflects the last minute you earned gold, not the idle period.")
+    -- panel.cashTimeDesc = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    -- panel.cashTimeDesc:SetPoint("TOPLEFT", panel.cashTimeLabel, "BOTTOMLEFT", 0, -4)
+    -- panel.cashTimeDesc:SetPoint("RIGHT", panel, "RIGHT", -16, 0)
+    -- panel.cashTimeDesc:SetJustifyH("LEFT")
+    -- panel.cashTimeDesc:SetText("Gold is only tracked when you actually gain it; idle time and start and end (e.g. AFK or logged out) is ignored. The value shown is based on the most recent gain, up to the specified window, and data is retained for up to 24 hours. For example, if you go AFK for 10 minutes then return, the 5‑minute window still reflects the last minute you earned gold, not the idle period.")
 
     panel:SetScript("OnShow", function(self)
         panel.showChat:SetChecked(xpt_global_data.show_chat)
@@ -322,6 +321,7 @@ function xpt:update_ui()
     -- if no xp can be earned or we are at max level, hide the XP bar (but keep gold text)
     local level = UnitLevel("player")
     local now = GetTime()
+    xpt:updateRunningTime()
     local maxLevel = GetMaxPlayerLevel and GetMaxPlayerLevel() or 0
     -- determine if we should hide xp bar elements (max level or no xp possible)
     local hideXP = xp_max == 0 or (maxLevel>0 and level >= maxLevel)
@@ -435,10 +435,7 @@ function xpt:update_ui()
                       .. "  XP: " .. string.format("%.1f%%", instance_xp_pct) .. "\n"
     end
     
-    if cash_in_last_minutes_cache == nil then
-        cash_in_last_minutes_cache = xpt:cash_in_last_minutes(xpt_global_data.cash_minute_ui_timeframe or 5);
-    end
-    local goldstr = xp_util.to_gsc_string(cash_in_last_minutes_cache)
+    local goldstr = xp_util.to_gsc_string(xpt:cash_in_last_minutes(xpt_global_data.cash_minute_ui_timeframe or 5))
 
     --TODO test this
     local currencies = {}
@@ -446,9 +443,10 @@ function xpt:update_ui()
         local sums = {}
         for i=#xpt_character_data.currency_history,1,-1 do
             local ev = xpt_character_data.currency_history[i]
-            if now - ev.time <= 300 then
+            if now - ev.time <= (xpt_global_data.cash_minute_ui_timeframe or 5) * 60 then
                 sums[ev.name] = (sums[ev.name] or 0) + ev.diff
             elseif now - ev.time > 86400 then
+                --remove entries older than a day to prevent unbounded growth; these won't be included in the sums anyway
                 table.remove(xpt_character_data.currency_history,i)
             end
         end
@@ -467,7 +465,7 @@ function xpt:update_ui()
 end
 
 function xpt:trackCurrencies()
-    --xpt:print("Tracking currency changes...");
+    xpt:print("Tracking currency changes...");
     if not xpt_character_data.currency_last_amounts then
         xpt_character_data.currency_last_amounts = {}
     end
@@ -477,18 +475,23 @@ function xpt:trackCurrencies()
     local n = C_CurrencyInfo.GetCurrencyListSize()
     for i=1,n do
         local info = C_CurrencyInfo.GetCurrencyListInfo(i)
-        if info and not info.isHeader then
-            --xpt:print("Checking currency: "..(info.name or "unknown").." id: "..(info.currencyTypesID or info.currencyID or "none"));
+        if info and not info.isHeader and info.currencyID == 2815 then
+            xpt:print("Checking currency: ".. (info.name or "unknown") .." currencyTypesID: " .. (info.currencyTypesID or  "none") .. " currencyID " .. (info.currencyID or "none"))
             local id = info.currencyTypesID or info.currencyID
             local currency = C_CurrencyInfo.GetCurrencyInfo(id)
             if currency then
+               
                 local amount = currency.quantity or 0
-                local last = xpt_character_data.currency_last_amounts[id] or amount
+                if xpt_character_data.currency_last_amounts[id] == nil then
+                    xpt_character_data.currency_last_amounts[id] = amount
+                end
+                --xpt:print("xpt_character_data.currency_last_amounts[id]: " .. xpt_character_data.currency_last_amounts[id]);
+                local last = xpt_character_data.currency_last_amounts[id]
                 local diff = amount - last
                 if diff ~= 0 then
                     table.insert(xpt_character_data.currency_history,{time=GetTime(),id=id,name=info.name,diff=diff})
                     xpt_character_data.currency_last_amounts[id] = amount
-                    xpt:print(string.format("Currency %s (id: %d) amount: %d diff: %d", info.name or "unknown", id or 0, amount, diff));
+                    --xpt:print(string.format("Currency %s (id: %d) amount: %d diff: %d", info.name or "unknown", id or 0, amount, diff));
                 end
             end
         end
@@ -670,42 +673,45 @@ function xpt:hour()
 	end
 end
 
+function xpt:updateRunningTime()
+    local current_time = math.floor(GetTime());
+	local cash_time_diff = current_time - self.cash_time_last_paid ;
+	self.cash_time_last_paid = current_time;
+	xpt_character_data.cash_running_time = xpt_character_data.cash_running_time + cash_time_diff;
+end
 
 -- We don't caount time before and after the last cash time so we just factor that out by 
 function xpt:PLAYER_MONEY(...)
-	    local current_time = math.floor(GetTime());
-		--DEFAULT_CHAT_FRAME:AddMessage("You where paid at "..xp_util.to_hms_string(current_time));
-		local cash_time_diff = current_time - self.cash_time_last_paid ;
-		self.cash_time_last_paid = current_time;
-		xpt_character_data.cash_running_time = xpt_character_data.cash_running_time + cash_time_diff;
-		--DEFAULT_CHAT_FRAME:AddMessage("You where last paid "..xp_util.to_hms_string(cash_time_diff).." ago.");
-		local current_cash = GetMoney(); 
+
+	    self:updateRunningTime()
+        local current_cash = GetMoney(); 
 		local cash_diff = current_cash - self.cash_last_known ;
 		self.cash_last_known = current_cash;
-		-- record gold change for the 5‑minute UI summary
 	
-		if xpt_global_data["show_cash_on_earn"] then
-			if ( cash_diff > 0) then
+        -- track instance gold
+        if xpt_global_data["show_cash_on_earn"] then
+
+		    if self.in_instance then
+			    self.instance_gold_total = self.instance_gold_total + cash_diff
+                xpt:print("Instance gold total: "..xp_util.to_gsc_string(self.instance_gold_total) .. " (+" .. xp_util.to_gsc_string(cash_diff));
+            else
+    			if ( cash_diff > 0) then
 					xpt:print("You just made "..xp_util.to_gsc_string(cash_diff));
-			else
+	    		else
 					xpt:print("You just lost "..xp_util.to_gsc_string(cash_diff));		
-			end
-		end
+		    	end
+		    end
+        end
+
 		
-		-- track instance gold
-		if self.in_instance then
-			self.instance_gold_total = self.instance_gold_total + cash_diff
-            xpt:print("Instance gold total: "..xp_util.to_gsc_string(self.instance_gold_total) .. " (+" .. xp_util.to_gsc_string(cash_diff) .. " this gain)");
-		end
+		
+		
 		--DEFAULT_CHAT_FRAME:AddMessage("You have "..xp_util.to_gsc_string(GetMoney()));
 		if (xpt_character_data.cash_values_array[xpt_character_data.cash_running_time] == nil) then
 			xpt_character_data.cash_values_array[xpt_character_data.cash_running_time] = cash_diff
 		else
 			xpt_character_data.cash_values_array[xpt_character_data.cash_running_time] = xpt_character_data.cash_values_array[xpt_character_data.cash_running_time]+ cash_diff;
 		end
-
-        --recalculate the cache for cash in the last 5 minutes so it's up to date for the UI and commands
-        cash_in_last_minutes_cache = xpt:cash_in_last_minutes(xpt_global_data.cash_minute_ui_timeframe or 5);
         -- update UI immediately
 		self:update_ui()
 		--DEFAULT_CHAT_FRAME:AddMessage("You recieved "..xp_util.to_gsc_string(xpt_character_data.cash_values_array[xpt_character_data.cash_running_time]).."this second.");
@@ -729,6 +735,7 @@ end
 
 --Get the amount of cash made in the last X minutes
 function xpt:cash_in_last_minutes(...)
+    xpt:updateRunningTime()
     local minutes = {...}
     --xpt:print("Calculating cash in the last "..table.concat(minutes,",").." minutes...");
     if not xpt_character_data.cash_values_array then return end
@@ -768,24 +775,22 @@ function xpt:ctdefault(...)
 			xpt:print("Cash display |cff00ff00enabled|r");
 	end
 	
-	local current_time = math.floor(GetTime());
-	local cash_time_diff = current_time - self.cash_time_last_paid ;
-	self.cash_time_last_paid = current_time;
-	xpt_character_data.cash_running_time = xpt_character_data.cash_running_time + cash_time_diff;
-     local timespan_minutes = nil
-     if include_timespan then timespan_minutes = timespan / 60 end
-     local cash_in_last_fiveminute, cash_in_last_hour, cash_in_last_day, cash_in_timespan = xpt:cash_in_last_minutes(xpt_global_data.cash_minute_ui_timeframe or 5, 60, 1440, timespan_minutes)
-     cash_in_last_fiveminute = cash_in_last_fiveminute or 0
-     cash_in_last_hour = cash_in_last_hour or 0
-     cash_in_last_day = cash_in_last_day or 0
-     cash_in_timespan = cash_in_timespan or 0
+	xpt:updateRunningTime()
 
-     xpt:print("Cash in last " .. (xpt_global_data.cash_minute_ui_timeframe or 5) .. " minutes: "..xp_util.to_gsc_string(cash_in_last_fiveminute));
-     xpt:print("Cash in last hour: "..xp_util.to_gsc_string(cash_in_last_hour));
-     xpt:print("Cash in last day: "..xp_util.to_gsc_string(cash_in_last_day));
-     if (include_timespan) then
-                xpt:print(string.format("Cash in last |cff00ff00%d|r minutes: %s ",timespan/60,xp_util.to_gsc_string(cash_in_timespan)));
-     end
+    local timespan_minutes = nil
+    if include_timespan then timespan_minutes = timespan / 60 end
+    local cash_in_last_fiveminute, cash_in_last_hour, cash_in_last_day, cash_in_timespan = xpt:cash_in_last_minutes(xpt_global_data.cash_minute_ui_timeframe or 5, 60, 1440, timespan_minutes)
+    cash_in_last_fiveminute = cash_in_last_fiveminute or 0
+    cash_in_last_hour = cash_in_last_hour or 0
+    cash_in_last_day = cash_in_last_day or 0
+    cash_in_timespan = cash_in_timespan or 0
+
+    xpt:print("Cash in last " .. (xpt_global_data.cash_minute_ui_timeframe or 5) .. " minutes: "..xp_util.to_gsc_string(cash_in_last_fiveminute));
+    xpt:print("Cash in last hour: "..xp_util.to_gsc_string(cash_in_last_hour));
+    xpt:print("Cash in last day: "..xp_util.to_gsc_string(cash_in_last_day));
+    if (include_timespan) then
+            xpt:print(string.format("Cash in last |cff00ff00%d|r minutes: %s ",timespan/60,xp_util.to_gsc_string(cash_in_timespan)));
+    end
 end
 function xpt:cash(...)
 	xpt:ct(...)
@@ -918,11 +923,7 @@ function xpt:party()
 			DEFAULT_CHAT_FRAME:AddMessage("Dungeons to next level: "..dungeons_to_lvl);
 		end
 		local cash_in_party = 0;
-		--update the time for cash tracking.
-        local current_time = math.floor(GetTime());
-        local cash_time_diff = current_time - self.cash_time_last_paid ;
-		self.cash_time_last_paid = current_time;
-		xpt_character_data.cash_running_time = xpt_character_data.cash_running_time + cash_time_diff;
+		xpt:updateRunningTime()
         DEFAULT_CHAT_FRAME:AddMessage("Time in party for cash tracking: "..xp_util.to_hms_string(time_diff));
 		local cash_in_party = select(1, xpt:cash_in_last_minutes(time_diff/60)) or 0
 		if cash_in_party > 0 then
