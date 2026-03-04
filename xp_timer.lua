@@ -257,6 +257,23 @@ local function create_options_panel()
         end
     end)
 
+    -- Button to reset the addon UI position back to the default
+    panel.resetPosition = CreateFrame("Button", "XP_Timer_ResetPosition", panel, "UIPanelButtonTemplate")
+    panel.resetPosition:SetSize(150, 22)
+    panel.resetPosition:SetPoint("TOPLEFT", panel.cashTimeEdit, "BOTTOMLEFT", 0, -12)
+    panel.resetPosition:SetText("Reset UI Position")
+    panel.resetPosition:SetScript("OnClick", function()
+        xpt_global_data.ui_point = nil
+        xpt_global_data.ui_relPoint = nil
+        xpt_global_data.ui_xOfs = nil
+        xpt_global_data.ui_yOfs = nil
+        if xpt_ui_frame then
+            xpt_ui_frame:ClearAllPoints()
+            xpt_ui_frame:SetPoint("CENTER", 0, 0)
+        end
+        xpt:print("UI position reset to center")
+    end)
+
     -- panel.cashTimeDesc = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
     -- panel.cashTimeDesc:SetPoint("TOPLEFT", panel.cashTimeLabel, "BOTTOMLEFT", 0, -4)
     -- panel.cashTimeDesc:SetPoint("RIGHT", panel, "RIGHT", -16, 0)
@@ -465,7 +482,7 @@ function xpt:update_ui()
 end
 
 function xpt:trackCurrencies()
-    xpt:print("Tracking currency changes...");
+    --xpt:print("Tracking currency changes...");
     if not xpt_character_data.currency_last_amounts then
         xpt_character_data.currency_last_amounts = {}
     end
@@ -475,8 +492,8 @@ function xpt:trackCurrencies()
     local n = C_CurrencyInfo.GetCurrencyListSize()
     for i=1,n do
         local info = C_CurrencyInfo.GetCurrencyListInfo(i)
-        if info and not info.isHeader and info.currencyID == 2815 then
-            xpt:print("Checking currency: ".. (info.name or "unknown") .." currencyTypesID: " .. (info.currencyTypesID or  "none") .. " currencyID " .. (info.currencyID or "none"))
+        if info and not info.isHeader then
+            --xpt:print("Checking currency: ".. (info.name or "unknown") .." currencyTypesID: " .. (info.currencyTypesID or  "none") .. " currencyID " .. (info.currencyID or "none"))
             local id = info.currencyTypesID or info.currencyID
             local currency = C_CurrencyInfo.GetCurrencyInfo(id)
             if currency then
