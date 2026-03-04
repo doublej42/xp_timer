@@ -235,7 +235,7 @@ local function create_options_panel()
 
     panel.cashTimeLabel = panel:CreateFontString(nil,"ARTWORK","GameFontNormal")
     panel.cashTimeLabel:SetPoint("TOPLEFT", panel.showCashOnEarn, "BOTTOMLEFT", 0, -10)
-    panel.cashTimeLabel:SetText("Small gold timeframe (minutes):")
+    panel.cashTimeLabel:SetText("Gold timeframe (minutes):")
 
     panel.cashTimeEdit = CreateFrame("EditBox", "XP_Timer_CashTimeEdit", panel, "InputBoxTemplate")
     panel.cashTimeEdit:SetSize(50, 20)
@@ -253,6 +253,12 @@ local function create_options_panel()
             self:SetText(xpt_global_data.cash_minute_ui_timeframe or 5)
         end
     end)
+
+    panel.cashTimeDesc = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    panel.cashTimeDesc:SetPoint("TOPLEFT", panel.cashTimeLabel, "BOTTOMLEFT", 0, -4)
+    panel.cashTimeDesc:SetPoint("RIGHT", panel, "RIGHT", -16, 0)
+    panel.cashTimeDesc:SetJustifyH("LEFT")
+    panel.cashTimeDesc:SetText("Gold is only tracked when you actually gain it; idle time and start and end (e.g. AFK or logged out) is ignored. The value shown is based on the most recent gain, up to the specified window, and data is retained for up to 24 hours. For example, if you go AFK for 10 minutes then return, the 5‑minute window still reflects the last minute you earned gold, not the idle period.")
 
     panel:SetScript("OnShow", function(self)
         panel.showChat:SetChecked(xpt_global_data.show_chat)
