@@ -4,7 +4,7 @@
 
 
 local xpt = {};
-local xpt_global_data_defaults = { show_chat = true, show_ui = true, cash_minute_ui_timeframe = 5 };
+local xpt_global_data_defaults = { show_chat = true, show_ui = true, ui_timeframe = 5 };
 local xpt_character_data_defaults = {};
 local xpt_frame = CreateFrame("Frame");
 local wasinparty = false;
@@ -43,11 +43,11 @@ end)
 local xp_util = {}
 
 function xp_util.to_hms(seconds)
-  hours = math.floor (seconds / 3600);
+  local hours = math.floor(seconds / 3600);
   seconds = seconds - (hours * 3600);
-  minutes = math.floor (seconds / 60);
-  seconds = math.floor (seconds - (minutes * 60));
-  return hours,minutes,seconds;
+  local minutes = math.floor(seconds / 60);
+  seconds = math.floor(seconds - (minutes * 60));
+  return hours, minutes, seconds;
 end --to_hms
 
 function xp_util.to_hms_string(seconds)
@@ -61,23 +61,23 @@ function xp_util.to_gsc(copper)
 		positive = -1;
 	end
 	copper = copper * positive;
-	gold = math.floor (copper / 10000);
+	local gold = math.floor(copper / 10000);
 	copper = copper - (gold * 10000);
-	silver = math.floor (copper / 100);
-	copper = math.floor (copper - (silver * 100));
-	return gold,silver,copper;
+	local silver = math.floor(copper / 100);
+	copper = math.floor(copper - (silver * 100));
+	return gold, silver, copper;
 end --to_hms
 
 function xp_util.to_gsc_string(copper)
-    local g,s,c = xp_util.to_gsc(copper)
+    local g, s, c = xp_util.to_gsc(copper)
     local goldIcon = "|TInterface\\MoneyFrame\\UI-GoldIcon:0:0:0:0|t"
     local silverIcon = "|TInterface\\MoneyFrame\\UI-SilverIcon:0:0:0:0|t"
     local copperIcon = "|TInterface\\MoneyFrame\\UI-CopperIcon:0:0:0:0|t"
     local ret = string.format("%d%s %d%s %d%s", g, goldIcon, s, silverIcon, c, copperIcon)
-    if (copper < 0) then
-        ret = "-" .. ret;
+    if copper < 0 then
+        ret = "-" .. ret
     end
-    return ret;
+    return ret
 end
 
 --[[
@@ -89,7 +89,8 @@ local xpt_ui_frame
 
 local function create_ui()
     -- use BackdropTemplate for borders
-    local frame = CreateFrame("Frame","XP_Timer_UI_Frame",UIParent,"BackdropTemplate")
+    -- unnamed frame prevents a global variable being created
+    local frame = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
     -- make room for the gold text underneath the bar
     frame:SetSize(200,24)
     frame:SetPoint("CENTER",0,0)
@@ -103,6 +104,7 @@ local function create_ui()
     })
     frame:SetBackdropColor(0,0,0,0.4)
     frame:SetBackdropBorderColor(1,1,1,1)
+
     frame:EnableMouse(true)
     frame:RegisterForDrag("LeftButton")
     frame:SetScript("OnDragStart", frame.StartMoving)
@@ -153,18 +155,14 @@ local function create_ui()
     -- The old "GameFontSmall" template can taint in newer clients and may not exist;
     -- use a modern small font object or set the font manually as a fallback.
     local goldtext = frame:CreateFontString(nil,"OVERLAY")
-    if GameFontNormalSmall then
-        goldtext:SetFontObject(GameFontNormalSmall)
-    else
-        -- final fallback: specify a default font and size
-        goldtext:SetFont("Fonts\FRIZQT__.TTF", 10)
-    end
+    goldtext:SetFont(GameFontNormal:GetFont(), 10, "OUTLINE")
     -- anchor inside frame area so dragging frame still works when bar
     -- position the gold text below the XP bar
     goldtext:SetPoint("TOP", bar, "BOTTOM", 0, -2)
     goldtext:SetJustifyH("CENTER")
 
     -- allow clicks on the text to move the parent frame as well
+    --We are not using dragable as we want the text to "drag" the frame and have the text achored to it.
     goldtext:EnableMouse(true)
     goldtext:SetScript("OnMouseDown", function()
         frame:StartMoving()
@@ -202,7 +200,8 @@ end
 
 -- create an options panel under Interface Options or Settings
 local function create_options_panel()
-    local panel = CreateFrame("Frame", "XP_Timer_Options", UIParent)
+    -- the panel name isn't needed unless you intend to reference it globally
+    local panel = CreateFrame("Frame", nil, UIParent)
     panel.name = "XP Timer"
 
     local title = panel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
@@ -249,11 +248,11 @@ local function create_options_panel()
     panel.cashTimeEdit:SetScript("OnEditFocusLost", function(self)
         local val = tonumber(self:GetText())
         if val and val > 0 then
-            xpt_global_data.cash_minute_ui_timeframe = val
+            xpt_global_data.ui_timeframe = val
             xpt:update_ui()
             self:ClearFocus()
         else
-            self:SetText(xpt_global_data.cash_minute_ui_timeframe or 5)
+            self:SetText(xpt_global_data.ui_timeframe or 5)
         end
     end)
 
@@ -287,7 +286,7 @@ local function create_options_panel()
             panel.showCashOnEarn:SetChecked(xpt_global_data.show_cash_on_earn)
         end
         if panel.cashTimeEdit then
-            panel.cashTimeEdit:SetText(xpt_global_data.cash_minute_ui_timeframe or 5)
+            panel.cashTimeEdit:SetText(xpt_global_data.ui_timeframe or 5)
         end
     end)
 
@@ -452,7 +451,7 @@ function xpt:update_ui()
                       .. "  XP: " .. string.format("%.1f%%", instance_xp_pct) .. "\n"
     end
     
-    local goldstr = xp_util.to_gsc_string(xpt:cash_in_last_minutes(xpt_global_data.cash_minute_ui_timeframe or 5))
+    local goldstr = xp_util.to_gsc_string(xpt:cash_in_last_minutes(xpt_global_data.ui_timeframe or 5))
 
     --TODO test this
     local currencies = {}
@@ -460,7 +459,7 @@ function xpt:update_ui()
         local sums = {}
         for i=#xpt_character_data.currency_history,1,-1 do
             local ev = xpt_character_data.currency_history[i]
-            if now - ev.time <= (xpt_global_data.cash_minute_ui_timeframe or 5) * 60 then
+            if now - ev.time <= (xpt_global_data.ui_timeframe or 5) * 60 then
                 sums[ev.name] = (sums[ev.name] or 0) + ev.diff
             elseif now - ev.time > 86400 then
                 --remove entries older than a day to prevent unbounded growth; these won't be included in the sums anyway
@@ -476,7 +475,7 @@ function xpt:update_ui()
         curstr = table.concat(currencies, "  ")
     end
     --end currencies
-    local display = instanceStr .. "Gold " .. (xpt_global_data.cash_minute_ui_timeframe or 5) .. "m: "..goldstr
+    local display = instanceStr .. "Gold " .. (xpt_global_data.ui_timeframe or 5) .. "m: "..goldstr
     if curstr~="" then display = display.."  "..curstr end
     xpt_ui_frame.goldtext:SetText(display)
 end
@@ -570,7 +569,7 @@ function xpt:ADDON_LOADED(...)
         -- ensure boolean defaults exist
         if xpt_global_data.show_chat == nil then xpt_global_data.show_chat = true end
         if xpt_global_data.show_ui == nil then xpt_global_data.show_ui = true end
-        if xpt_global_data.cash_minute_ui_timeframe == nil then xpt_global_data.cash_minute_ui_timeframe = xpt_global_data_defaults.cash_minute_ui_timeframe or 5 end
+        if xpt_global_data.ui_timeframe == nil then xpt_global_data.ui_timeframe = xpt_global_data_defaults.ui_timeframe or 5 end
 
         if not SlashCmdList["XPTIMER"] then -- make sure we don't overwrite default if Blizz decides to use same name
                 SlashCmdList["XPTIMER"] = function(msg)
@@ -796,13 +795,13 @@ function xpt:ctdefault(...)
 
     local timespan_minutes = nil
     if include_timespan then timespan_minutes = timespan / 60 end
-    local cash_in_last_fiveminute, cash_in_last_hour, cash_in_last_day, cash_in_timespan = xpt:cash_in_last_minutes(xpt_global_data.cash_minute_ui_timeframe or 5, 60, 1440, timespan_minutes)
+    local cash_in_last_fiveminute, cash_in_last_hour, cash_in_last_day, cash_in_timespan = xpt:cash_in_last_minutes(xpt_global_data.ui_timeframe or 5, 60, 1440, timespan_minutes)
     cash_in_last_fiveminute = cash_in_last_fiveminute or 0
     cash_in_last_hour = cash_in_last_hour or 0
     cash_in_last_day = cash_in_last_day or 0
     cash_in_timespan = cash_in_timespan or 0
 
-    xpt:print("Cash in last " .. (xpt_global_data.cash_minute_ui_timeframe or 5) .. " minutes: "..xp_util.to_gsc_string(cash_in_last_fiveminute));
+    xpt:print("Cash in last " .. (xpt_global_data.ui_timeframe or 5) .. " minutes: "..xp_util.to_gsc_string(cash_in_last_fiveminute));
     xpt:print("Cash in last hour: "..xp_util.to_gsc_string(cash_in_last_hour));
     xpt:print("Cash in last day: "..xp_util.to_gsc_string(cash_in_last_day));
     if (include_timespan) then
