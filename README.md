@@ -39,9 +39,9 @@ Once installed, the addon will automatically start tracking your experience when
 
 | Command | Description |
 |---------|-------------|
-| `/ct` or `/cash_timer` | Display gold earned in last 5 minutes, 1 hour, and 24 hours |
-| `/ct [minutes]` | Show gold earned in the last X minutes (max 1440 minutes / 24 hours) |
-| `/ct on` / `/ct off` | Enable or disable gold earning notifications |
+| `/gt` or `/gold_timer` | Display gold earned in last 5 minutes, 1 hour, and 24 hours |
+| `/gt [minutes]` | Show gold earned in the last X minutes (max 1440 minutes / 24 hours) |
+| `/gt on` / `/gt off` | Enable or disable gold earning notifications |
 
 ### Group & Dungeon Commands
 

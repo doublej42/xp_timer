@@ -1,6 +1,6 @@
 ﻿## Interface: 120001
 ## Title: XP Timer with UI
-## Notes: Track how long to next lvl and cash earned
+## Notes: Track how long to next lvl and gold earned
 ## SavedVariablesPerCharacter:xpt_character_data
 ## SavedVariables: xpt_global_data
 ## Author: Jeff Jacob
