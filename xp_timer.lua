@@ -81,6 +81,9 @@ end
 
 -- frame that shows xp %, estimated time and recent currency gains
 local xpt_ui_frame
+local DEFAULT_UI_WIDTH = 200
+local DEFAULT_UI_HEIGHT = 24
+local MIN_UI_HEIGHT = 24
 
 -- Will be assigned to xpt_ui_frame after creation
 local function create_ui()
@@ -88,9 +91,11 @@ local function create_ui()
     -- unnamed frame prevents a global variable being created
     local frame = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
     -- make room for the gold text underneath the bar
-    frame:SetSize(200, 24)
+    frame:SetSize(DEFAULT_UI_WIDTH, DEFAULT_UI_HEIGHT)
     frame:SetPoint("CENTER", 0, 0)
     frame:SetMovable(true)
+    frame:SetResizable(true)
+    frame:SetResizeBounds(100, MIN_UI_HEIGHT, 1000, 140)
     -- give a light border and semi-transparent black background
     frame:SetBackdrop({
         bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
@@ -100,7 +105,7 @@ local function create_ui()
     })
     frame:SetBackdropColor(0, 0, 0, 0.4)
     frame:SetBackdropBorderColor(1, 1, 1, 1)
-
+    frame:SetClipsChildren(false)
     frame:EnableMouse(true)
     frame:RegisterForDrag("LeftButton")
     frame:SetScript("OnDragStart", frame.StartMoving)
@@ -123,21 +128,19 @@ local function create_ui()
     local rested_bg = frame:CreateTexture(nil, "BACKGROUND")
     rested_bg:SetTexture("Interface\\ChatFrame\\ChatFrameBackground")
     rested_bg:SetVertexColor(0.6, 0.8, 1, 0.5) -- light blue
-    rested_bg:SetPoint("LEFT", frame, "LEFT")
-    rested_bg:SetHeight(frame:GetHeight())
+    rested_bg:SetPoint("LEFT", frame, "LEFT", 2, 0)
 
     local normal_bg = frame:CreateTexture(nil, "BACKGROUND")
     normal_bg:SetTexture("Interface\\ChatFrame\\ChatFrameBackground")
     normal_bg:SetVertexColor(0.5, 1, 0.5, 0.5) -- light green
     normal_bg:SetPoint("LEFT", rested_bg, "RIGHT")
-    normal_bg:SetPoint("RIGHT", frame, "RIGHT")
-    normal_bg:SetHeight(frame:GetHeight())
+    normal_bg:SetPoint("RIGHT", frame, "RIGHT", -2, 0)
 
     -- main XP fill bar on top (only occupies the upper portion of the frame)
     local bar = CreateFrame("StatusBar", nil, frame)
-    bar:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, 0)
-    bar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 0, 0)
-    bar:SetHeight(24)
+    bar:SetPoint("TOPLEFT", frame, "TOPLEFT", 2, -2)
+    bar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -2, -2)
+    bar:SetHeight(20)
     bar:SetStatusBarTexture("Interface\\TARGETINGFRAME\\UI-StatusBar")
     bar:GetStatusBarTexture():SetHorizTile(false)
     bar:SetMinMaxValues(0, 100)
@@ -157,9 +160,8 @@ local function create_ui()
     -- use a modern small font object or set the font manually as a fallback.
     local goldtext = frame:CreateFontString(nil, "OVERLAY")
     goldtext:SetFont(GameFontNormal:GetFont(), 10, "OUTLINE")
-    -- anchor inside frame area so dragging frame still works when bar
-    -- position the gold text below the XP bar
-    goldtext:SetPoint("TOP", bar, "BOTTOM", 0, -2)
+    -- render gold text below the frame border (outside bar container)
+    goldtext:SetPoint("TOP", frame, "BOTTOM", 0, -2)
     goldtext:SetJustifyH("CENTER")
 
     -- allow clicks on the text to move the parent frame as well
@@ -185,6 +187,59 @@ local function create_ui()
     frame.bar = bar
     frame.text = text
     frame.goldtext = goldtext
+
+    -- create a WoW-style resize grabber that only appears on hover
+    local resizeHandle = CreateFrame("Button", nil, frame)
+    resizeHandle:SetSize(16, 16)
+    resizeHandle:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -3, 3)
+    resizeHandle:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+    resizeHandle:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+    resizeHandle:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+    resizeHandle:Hide()
+
+    local function updateLayout(self)
+        self.bar:SetPoint("TOPLEFT", self, "TOPLEFT", 2, -2)
+        self.bar:SetPoint("TOPRIGHT", self, "TOPRIGHT", -2, -2)
+        self.bar:SetPoint("BOTTOMLEFT", self, "BOTTOMLEFT", 2, 2)
+        self.bar:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", -2, 2)
+
+        self.rested_bg:SetPoint("TOPLEFT", self.bar, "TOPLEFT")
+        self.rested_bg:SetPoint("BOTTOMLEFT", self.bar, "BOTTOMLEFT")
+        self.normal_bg:SetPoint("TOPRIGHT", self.bar, "TOPRIGHT")
+        self.normal_bg:SetPoint("BOTTOMRIGHT", self.bar, "BOTTOMRIGHT")
+        self.goldtext:SetPoint("TOP", self, "BOTTOM", 0, -2)
+    end
+
+    local function updateResizeHandleVisibility()
+        if frame.isSizing or frame:IsMouseOver() or resizeHandle:IsMouseOver() then
+            resizeHandle:Show()
+        else
+            resizeHandle:Hide()
+        end
+    end
+
+    resizeHandle:SetScript("OnMouseDown", function()
+        frame.isSizing = true
+        updateResizeHandleVisibility()
+        frame:StartSizing("BOTTOMRIGHT")
+    end)
+    resizeHandle:SetScript("OnMouseUp", function()
+        frame.isSizing = false
+        frame:StopMovingOrSizing()
+        updateLayout(frame)
+        -- save the new size per character
+        local width = frame:GetWidth()
+        local height = frame:GetHeight()
+        xpt_character_data.ui_width = width
+        xpt_character_data.ui_height = height
+        updateResizeHandleVisibility()
+    end)
+    frame:SetScript("OnEnter", updateResizeHandleVisibility)
+    frame:SetScript("OnLeave", updateResizeHandleVisibility)
+    resizeHandle:SetScript("OnEnter", updateResizeHandleVisibility)
+    resizeHandle:SetScript("OnLeave", updateResizeHandleVisibility)
+    frame.resizeHandle = resizeHandle
+    frame.updateLayout = updateLayout
     frame:ClearAllPoints()
     if not xpt_character_data.ui_point then
         --use last character position if availble, otherwise global last position; this allows new characters to default to the last position set by the user
@@ -204,12 +259,25 @@ local function create_ui()
     frame:SetPoint(xpt_character_data.ui_point, UIParent, xpt_character_data.ui_relPoint,
         xpt_character_data.ui_xOfs, xpt_character_data.ui_yOfs)
 
+    -- restore saved size if available
+    if xpt_character_data.ui_width and xpt_character_data.ui_height then
+        frame:SetSize(xpt_character_data.ui_width, xpt_character_data.ui_height)
+    end
+
+    updateLayout(frame)
+
     frame.elapsed = 0
     frame:SetScript("OnUpdate", function(self, elapsed)
         self.elapsed = self.elapsed + elapsed
         if self.elapsed >= 1 then
             self.elapsed = 0
             xpt:update_ui()
+        end
+    end)
+
+    frame:SetScript("OnSizeChanged", function(self)
+        if self.updateLayout then
+            self.updateLayout(self)
         end
     end)
 
@@ -292,6 +360,20 @@ local function create_options_panel()
                 xpt_character_data.ui_xOfs, xpt_character_data.ui_yOfs)
         end
         xpt:print("UI position reset to center")
+    end)
+
+    -- Button to reset the addon UI size back to the default
+    panel.resetSize = CreateFrame("Button", "XP_Timer_ResetSize", panel, "UIPanelButtonTemplate")
+    panel.resetSize:SetSize(150, 22)
+    panel.resetSize:SetPoint("LEFT", panel.resetPosition, "RIGHT", 5, 0)
+    panel.resetSize:SetText("Reset UI Size")
+    panel.resetSize:SetScript("OnClick", function()
+        xpt_character_data.ui_width = nil
+        xpt_character_data.ui_height = nil
+        if xpt_ui_frame then
+            xpt_ui_frame:SetSize(DEFAULT_UI_WIDTH, DEFAULT_UI_HEIGHT)
+        end
+        xpt:print("UI size reset to default (" .. DEFAULT_UI_WIDTH .. "x" .. DEFAULT_UI_HEIGHT .. ")")
     end)
 
     panel:SetScript("OnShow", function(self)
@@ -378,7 +460,7 @@ function xpt:update_ui()
     if xp_max > 0 then
         restPct = math.min(rest / xp_max * 100, 100)
     end
-    local totalWidth = xpt_ui_frame:GetWidth()
+    local totalWidth = xpt_ui_frame.bar and xpt_ui_frame.bar:GetWidth() or xpt_ui_frame:GetWidth()
     if xpt_ui_frame.rested_bg then
         xpt_ui_frame.rested_bg:SetWidth(totalWidth * (restPct / 100))
     end
@@ -424,7 +506,7 @@ function xpt:update_ui()
     if xp_max > 0 then
         restPct = math.min(rest / xp_max * 100, 100)
     end
-    local totalWidth = xpt_ui_frame:GetWidth()
+    local totalWidth = xpt_ui_frame.bar and xpt_ui_frame.bar:GetWidth() or xpt_ui_frame:GetWidth()
     if xpt_ui_frame.rested_bg then
         xpt_ui_frame.rested_bg:SetWidth(totalWidth * (restPct / 100))
     end
@@ -468,7 +550,7 @@ function xpt:update_ui()
         curstr = table.concat(currencies, "  ")
     end
     --end currencies
-    local display = instanceStr .. "Gold " .. (xpt_global_data.ui_timeframe or 5) .. "m: " .. goldstr
+    local display = instanceStr .. "Last " .. (xpt_global_data.ui_timeframe or 5) .. "m: " .. goldstr
     if curstr ~= "" then display = display .. "  " .. curstr end
     xpt_ui_frame.goldtext:SetText(display)
 end
