@@ -538,12 +538,19 @@ function xpt:update_ui()
         local sums = {}
         for i = #xpt_character_data.currency_history, 1, -1 do
             local ev = xpt_character_data.currency_history[i]
-            if now - ev.time <= (xpt_global_data.ui_timeframe or xpt_global_data_defaults.ui_timeframe) * 60 then
+            --print(string.format("Checking currency event: %s %+d at time %d (%.1f minutes ago)", ev.name, ev.diff, ev.time,(now - ev.time) / 60))
+            if ev.time > xpt_character_data.running_time then
+                -- future event? Fix for bad version
+                table.remove(xpt_character_data.currency_history, i)
+                print(string.format("Skipping currency event from the future, sorry this was a one time bug: %s %+d at time %d", ev.name, ev.diff, ev.time))
+            elseif ev.time >= xpt_character_data.running_time - (xpt_global_data.ui_timeframe or xpt_global_data_defaults.ui_timeframe) * 60 then
                 sums[ev.name] = (sums[ev.name] or 0) + ev.diff
-            elseif now - ev.time > 86400 then
+                --print(string.format("Currency event within timeframe: %s %+d", ev.name, ev.diff))
+            elseif ev.time < xpt_character_data.running_time - 86400 then
                 --remove entries older than a day to prevent unbounded growth; these won't be included in the sums anyway
                 table.remove(xpt_character_data.currency_history, i)
             end
+            
         end
         for name, amt in pairs(sums) do
             table.insert(currencies, string.format("%s %+d", name, amt))
@@ -559,43 +566,7 @@ function xpt:update_ui()
     xpt_ui_frame.goldtext:SetText(display)
 end
 
-local function trackCurrencies()
-    --xpt:print("Tracking currency changes...");
-    if not xpt_character_data.currency_last_amounts then
-        xpt_character_data.currency_last_amounts = {}
-    end
-    if not xpt_character_data.currency_history then
-        xpt_character_data.currency_history = {}
-    end
-    local n = C_CurrencyInfo.GetCurrencyListSize()
-    for i = 1, n do
-        local info = C_CurrencyInfo.GetCurrencyListInfo(i)
-        if info and not info.isHeader then
-            local id = info.currencyID
-            local currency = C_CurrencyInfo.GetCurrencyInfo(id)
-            if currency then
-                local amount = currency.quantity or 0
-                if xpt_character_data.currency_last_amounts[id] == nil then
-                    xpt_character_data.currency_last_amounts[id] = amount
-                end
-                --xpt:print("xpt_character_data.currency_last_amounts[id]: " .. xpt_character_data.currency_last_amounts[id]);
-                local last = xpt_character_data.currency_last_amounts[id]
-                local diff = amount - last
-                if diff ~= 0 then
-                    table.insert(xpt_character_data.currency_history, { time = GetTime(), id = id, name = info.name, diff =
-                    diff })
-                    xpt_character_data.currency_last_amounts[id] = amount
-                    --xpt:print(string.format("Currency %s (id: %d) amount: %d diff: %d", info.name or "unknown", id or 0, amount, diff));
-                end
-            end
-        end
-    end
-end
 
-function xpt:CURRENCY_DISPLAY_UPDATE(...)
-    trackCurrencies()
-    xpt:update_ui()
-end
 
 -- Check if we join a party/raid.
 -- Thank you skada for the inspiration
@@ -642,6 +613,27 @@ function xpt:ADDON_LOADED(...)
         if type(xpt_character_data) ~= "table" then
             xpt_character_data = xpt_character_data_defaults;
         end
+        -- cleanup: remove old cash_values_array
+        if xpt_character_data.cash_values_array then
+            xpt_character_data.cash_values_array = nil
+        end
+        if xpt_character_data.cash_values_array then
+            xpt_character_data.cash_values_array = nil
+        end
+        --cleanup old variable names
+        if xpt_character_data.cash_running_time then
+            if (xpt_character_data.running_time == nil) then
+                xpt_character_data.running_time = xpt_character_data.cash_running_time
+            end
+            xpt_character_data.cash_running_time = nil
+        end
+        if xpt_character_data.gold_running_time then
+            if (xpt_character_data.running_time == nil) then
+                xpt_character_data.running_time = xpt_character_data.gold_running_time
+            end
+            xpt_character_data.gold_running_time = nil
+        end
+        
         -- ensure boolean defaults exist
         if xpt_global_data.show_chat == nil then xpt_global_data.show_chat = true end
         if xpt_global_data.show_ui == nil then xpt_global_data.show_ui = true end
@@ -676,7 +668,6 @@ function xpt:PLAYER_LOGIN(...)
         xpt_ui_frame:Hide()
     end
     -- gather initial currency values so deltas are correct
-    trackCurrencies()
     self:update_ui()
     -- build options panel once at login (actual registration may be deferred)
     create_options_panel()
@@ -797,7 +788,7 @@ function xpt:updateRunningTime()
     local current_time = math.floor(GetTime());
     local gold_time_diff = current_time - self.gold_time_last_paid;
     self.gold_time_last_paid = current_time;
-    xpt_character_data.gold_running_time = xpt_character_data.gold_running_time + gold_time_diff;
+    xpt_character_data.running_time = xpt_character_data.running_time + gold_time_diff;
 end
 
 -- We don't caount time before and after the last gold time so we just factor that out by
@@ -825,19 +816,57 @@ function xpt:PLAYER_MONEY(...)
         end
     end
 
-
-
-
     --DEFAULT_CHAT_FRAME:AddMessage("You have "..xp_util.to_gsc_string(GetMoney()));
-    if (xpt_character_data.gold_values_array[xpt_character_data.gold_running_time] == nil) then
-        xpt_character_data.gold_values_array[xpt_character_data.gold_running_time] = gold_diff
+    if (xpt_character_data.gold_values_array[xpt_character_data.running_time] == nil) then
+        xpt_character_data.gold_values_array[xpt_character_data.running_time] = gold_diff
     else
-        xpt_character_data.gold_values_array[xpt_character_data.gold_running_time] = xpt_character_data
-        .gold_values_array[xpt_character_data.gold_running_time] + gold_diff;
+        xpt_character_data.gold_values_array[xpt_character_data.running_time] = xpt_character_data.gold_values_array[xpt_character_data.running_time] + gold_diff;
     end
     -- update UI immediately
     self:update_ui()
-    --DEFAULT_CHAT_FRAME:AddMessage("You recieved "..xp_util.to_gsc_string(xpt_character_data.gold_values_array[xpt_character_data.gold_running_time]).."this second.");
+    --DEFAULT_CHAT_FRAME:AddMessage("You recieved "..xp_util.to_gsc_string(xpt_character_data.gold_values_array[xpt_character_data.running_time]).."this second.");
+end
+
+local function trackCurrencies()
+    if (xpt.gold_time_last_paid == nil) then
+        xpt.gold_time_last_paid = math.floor(GetTime());
+    end
+    xpt:updateRunningTime()
+    --xpt:print("Tracking currency changes...");
+    if not xpt_character_data.currency_last_amounts then
+        xpt_character_data.currency_last_amounts = {}
+    end
+    if not xpt_character_data.currency_history then
+        xpt_character_data.currency_history = {}
+    end
+    local n = C_CurrencyInfo.GetCurrencyListSize()
+    for i = 1, n do
+        local info = C_CurrencyInfo.GetCurrencyListInfo(i)
+        if info and not info.isHeader then
+            local id = info.currencyID
+            local currency = C_CurrencyInfo.GetCurrencyInfo(id)
+            if currency then
+                local amount = currency.quantity or 0
+                if xpt_character_data.currency_last_amounts[id] == nil then
+                    xpt_character_data.currency_last_amounts[id] = amount
+                end
+                --xpt:print("xpt_character_data.currency_last_amounts[id]: " .. xpt_character_data.currency_last_amounts[id]);
+                local last = xpt_character_data.currency_last_amounts[id]
+                local diff = amount - last
+                if diff ~= 0 then
+                    table.insert(xpt_character_data.currency_history, { time = xpt_character_data.running_time, id = id, name = info.name, diff =
+                    diff })
+                    xpt_character_data.currency_last_amounts[id] = amount
+                    --xpt:print(string.format("Currency %s (id: %d) amount: %d diff: %d", info.name or "unknown", id or 0, amount, diff));
+                end
+            end
+        end
+    end
+end
+
+function xpt:CURRENCY_DISPLAY_UPDATE(...)
+    trackCurrencies()
+    xpt:update_ui()
 end
 
 function xpt:ct(msg)
@@ -863,7 +892,7 @@ function xpt:gold_in_last_minutes(...)
     if not xpt_character_data.gold_values_array then return end
     local results = {}
     for i = 1, #minutes do results[i] = 0 end
-    local now = xpt_character_data.gold_running_time or 0
+    local now = xpt_character_data.running_time or 0
     --xpt:print("Current gold time: "..xp_util.to_hms_string(now));
     for gold_time, gold_made in pairs(xpt_character_data.gold_values_array) do
         local timeOffset = now - gold_time
@@ -967,18 +996,20 @@ end
 
 function xpt:gold_timer_setup()
     --DEFAULT_CHAT_FRAME:AddMessage("Gold Timer setup");
+    self.gold_time_last_paid = math.floor(GetTime());
     if (xpt_character_data.gold_values_array == nil) then
         xpt_character_data.gold_values_array = {}; -- first run on install
     end
-    if (xpt_character_data.gold_running_time == nil) then
-        xpt_character_data.gold_running_time = 0; -- first run on install
+    if (xpt_character_data.running_time == nil) then
+        xpt_character_data.running_time = 0; -- first run on install
     end
     if (xpt_global_data.show_gold_on_earn == nil) then
         xpt_global_data.show_gold_on_earn = true;
     end
 
     self.gold_last_known = GetMoney();
-    self.gold_time_last_paid = math.floor(GetTime());
+    --this is used to be the base we are tracking time as the dif from last paid because gettime is just the system uptime sop we reset.
+    
 end
 
 function xpt:off()
