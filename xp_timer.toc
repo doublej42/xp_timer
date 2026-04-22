@@ -1,4 +1,4 @@
-﻿## Interface: 120001
+﻿## Interface: 120001, 120005
 ## Title: XP Timer with UI
 ## Notes: Track how long to next lvl and gold earned
 ## SavedVariablesPerCharacter:xpt_character_data
